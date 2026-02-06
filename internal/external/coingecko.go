@@ -14,14 +14,24 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// SymbolMapping maps internal symbols to CoinGecko IDs.
-var SymbolMapping = map[string]string{
+// symbolMapping maps internal symbols to CoinGecko IDs.
+// Unexported to prevent external mutation.
+var symbolMapping = map[string]string{
 	"BTC":  "bitcoin",
 	"ETH":  "ethereum",
 	"XLM":  "stellar",
 	"Sats": "bitcoin",
 	"USD":  "tether",
 	"AU":   "gold",
+}
+
+// SymbolMapping returns a copy of the symbol-to-CoinGecko-ID mapping.
+func SymbolMapping() map[string]string {
+	result := make(map[string]string, len(symbolMapping))
+	for k, v := range symbolMapping {
+		result[k] = v
+	}
+	return result
 }
 
 // CoinGeckoClient fetches prices from the CoinGecko API.
@@ -51,7 +61,7 @@ var (
 func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.Decimal, error) {
 	// Collect unique CoinGecko IDs
 	uniqueIDs := make(map[string]bool)
-	for _, id := range SymbolMapping {
+	for _, id := range symbolMapping {
 		uniqueIDs[id] = true
 	}
 
@@ -76,7 +86,7 @@ func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.D
 	}
 
 	result := make(map[string]decimal.Decimal)
-	for symbol, coinID := range SymbolMapping {
+	for symbol, coinID := range symbolMapping {
 		prices, ok := raw[coinID]
 		if !ok {
 			slog.Warn("CoinGecko response missing symbol", "symbol", symbol, "coinID", coinID)

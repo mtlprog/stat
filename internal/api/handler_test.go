@@ -13,8 +13,9 @@ import (
 )
 
 type mockSnapshotRepo struct {
-	snapshots []snapshot.Snapshot
-	entityID  int
+	snapshots     []snapshot.Snapshot
+	entityID      int
+	lastListLimit int
 }
 
 func (m *mockSnapshotRepo) Save(_ context.Context, _ int, _ time.Time, _ json.RawMessage) error {
@@ -23,7 +24,7 @@ func (m *mockSnapshotRepo) Save(_ context.Context, _ int, _ time.Time, _ json.Ra
 
 func (m *mockSnapshotRepo) GetLatest(_ context.Context, _ string) (*snapshot.Snapshot, error) {
 	if len(m.snapshots) == 0 {
-		return nil, context.DeadlineExceeded
+		return nil, snapshot.ErrNotFound
 	}
 	return &m.snapshots[0], nil
 }
@@ -34,10 +35,11 @@ func (m *mockSnapshotRepo) GetByDate(_ context.Context, _ string, date time.Time
 			return &s, nil
 		}
 	}
-	return nil, context.DeadlineExceeded
+	return nil, snapshot.ErrNotFound
 }
 
 func (m *mockSnapshotRepo) List(_ context.Context, _ string, limit int) ([]snapshot.Snapshot, error) {
+	m.lastListLimit = limit
 	if limit > len(m.snapshots) {
 		limit = len(m.snapshots)
 	}
@@ -150,8 +152,9 @@ func TestListSnapshotsLimitCappedAt365(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Code)
 	}
-	// The handler should cap at 365, not pass 9999 through
-	// We can only verify it didn't crash; the real limit is in the handler logic
+	if repo.lastListLimit != 365 {
+		t.Errorf("limit passed to repo = %d, want 365 (should be capped)", repo.lastListLimit)
+	}
 }
 
 func TestListSnapshotsNegativeLimit(t *testing.T) {

@@ -2,6 +2,7 @@ package indicator
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/shopspring/decimal"
 
@@ -42,7 +43,9 @@ func (c *Layer1Calculator) Calculate(ctx context.Context, data domain.FundStruct
 	if c.Horizon != nil {
 		mtlAsset := domain.AssetInfo{Code: "MTL", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum4}
 		bid, err := c.Horizon.GetBidPrice(ctx, mtlAsset, domain.EURMTLAsset())
-		if err == nil {
+		if err != nil {
+			slog.Warn("failed to fetch bid price", "asset", "MTL", "error", err)
+		} else {
 			i10 = bid
 		}
 	}
@@ -52,7 +55,9 @@ func (c *Layer1Calculator) Calculate(ctx context.Context, data domain.FundStruct
 	if c.Horizon != nil {
 		mtlrectAsset := domain.AssetInfo{Code: "MTLRECT", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum12}
 		bid, err := c.Horizon.GetBidPrice(ctx, mtlrectAsset, domain.EURMTLAsset())
-		if err == nil {
+		if err != nil {
+			slog.Warn("failed to fetch bid price", "asset", "MTLRECT", "error", err)
+		} else {
 			i49 = bid
 		}
 	}

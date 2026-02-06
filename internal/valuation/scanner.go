@@ -26,7 +26,7 @@ func ScanAccountValuations(ctx context.Context, fetcher AccountFetcher, accountI
 	var valuations []domain.AssetValuation
 
 	for key, encodedValue := range account.Data {
-		// Check for _1COST suffix first (higher priority per Section 4.1)
+		// Check for _1COST suffix first (must precede _COST check to avoid partial suffix match)
 		var tokenCode string
 		var valType domain.ValuationType
 

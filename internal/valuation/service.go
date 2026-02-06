@@ -22,7 +22,7 @@ func NewService(fetcher AccountFetcher) *Service {
 }
 
 // FetchAllValuations scans all fund accounts for DATA entry valuations with concurrency=3.
-// Deduplicates by tokenCode:valuationType with owner priority.
+// Deduplicates by tokenCode:valuationType, keeping the first seen (sorted by source account).
 func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuation, error) {
 	accounts := domain.AccountRegistry()
 	var mu sync.Mutex

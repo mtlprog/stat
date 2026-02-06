@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -24,7 +25,12 @@ func NewHandler(snapshots *snapshot.Service) *Handler {
 func (h *Handler) GetLatestSnapshot(w http.ResponseWriter, r *http.Request) {
 	s, err := h.snapshots.GetLatest(r.Context(), "mtlf")
 	if err != nil {
-		writeError(w, http.StatusNotFound, "no snapshots found")
+		if errors.Is(err, snapshot.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no snapshots found")
+			return
+		}
+		slog.Error("failed to get latest snapshot", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
@@ -41,7 +47,12 @@ func (h *Handler) GetSnapshotByDate(w http.ResponseWriter, r *http.Request) {
 
 	s, err := h.snapshots.GetByDate(r.Context(), "mtlf", date)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "snapshot not found for date")
+		if errors.Is(err, snapshot.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "snapshot not found for date")
+			return
+		}
+		slog.Error("failed to get snapshot by date", "date", dateStr, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
@@ -59,7 +70,8 @@ func (h *Handler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 
 	snapshots, err := h.snapshots.List(r.Context(), "mtlf", limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list snapshots")
+		slog.Error("failed to list snapshots", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshots)
@@ -69,7 +81,8 @@ func (h *Handler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GenerateSnapshot(w http.ResponseWriter, r *http.Request) {
 	data, err := h.snapshots.Generate(r.Context(), "mtlf", time.Now())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate snapshot: "+err.Error())
+		slog.Error("failed to generate snapshot", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to generate snapshot")
 		return
 	}
 	writeJSON(w, http.StatusOK, data)

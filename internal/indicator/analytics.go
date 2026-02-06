@@ -39,7 +39,7 @@ func (c *AnalyticsCalculator) Calculate(_ context.Context, _ domain.FundStructur
 	// I47: VaR (requires historical time series — placeholder)
 	i47 := decimal.Zero
 
-	// I48: E/BV = Annual DPS / Book Value per Share = I54 / (I3 / I5)
+	// I48: D/BV (Annual DPS / Book Value per Share) = I54 / (I3 / I5)
 	i48 := decimal.Zero
 	if !i5.IsZero() && !i3.IsZero() {
 		avPerShare := i3.Div(i5)

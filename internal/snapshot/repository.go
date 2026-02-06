@@ -3,11 +3,16 @@ package snapshot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrNotFound indicates that the requested snapshot was not found.
+var ErrNotFound = errors.New("snapshot not found")
 
 // Snapshot represents a stored fund snapshot.
 type Snapshot struct {
@@ -61,6 +66,9 @@ func (r *PgRepository) GetLatest(ctx context.Context, entitySlug string) (*Snaps
 		 ORDER BY fs.snapshot_date DESC
 		 LIMIT 1`, entitySlug).Scan(&s.ID, &s.EntityID, &s.SnapshotDate, &s.Data, &s.CreatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("getting latest snapshot: %w", err)
 	}
 	return &s, nil
@@ -74,6 +82,9 @@ func (r *PgRepository) GetByDate(ctx context.Context, entitySlug string, date ti
 		 JOIN fund_entities fe ON fe.id = fs.entity_id
 		 WHERE fe.slug = $1 AND fs.snapshot_date = $2`, entitySlug, date).Scan(&s.ID, &s.EntityID, &s.SnapshotDate, &s.Data, &s.CreatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("getting snapshot by date: %w", err)
 	}
 	return &s, nil
@@ -104,7 +115,10 @@ func (r *PgRepository) List(ctx context.Context, entitySlug string, limit int) (
 		}
 		snapshots = append(snapshots, s)
 	}
-	return snapshots, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating snapshots: %w", err)
+	}
+	return snapshots, nil
 }
 
 func (r *PgRepository) GetEntityID(ctx context.Context, slug string) (int, error) {
@@ -112,6 +126,9 @@ func (r *PgRepository) GetEntityID(ctx context.Context, slug string) (int, error
 	err := r.pool.QueryRow(ctx,
 		`SELECT id FROM fund_entities WHERE slug = $1`, slug).Scan(&id)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNotFound
+		}
 		return 0, fmt.Errorf("getting entity ID for %s: %w", slug, err)
 	}
 	return id, nil

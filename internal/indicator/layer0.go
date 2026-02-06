@@ -2,6 +2,7 @@ package indicator
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
@@ -9,7 +10,7 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
-// Layer0Calculator computes per-account total values (I51, I52, I53, I56-I60) and BTC rate (I61).
+// Layer0Calculator computes per-account total values (I51-I53, I56-I60) and BTC rate (I61).
 type Layer0Calculator struct{}
 
 func (c *Layer0Calculator) IDs() []int          { return []int{51, 52, 53, 56, 57, 58, 59, 60, 61} }
@@ -31,13 +32,24 @@ func (c *Layer0Calculator) Calculate(_ context.Context, data domain.FundStructur
 
 	var indicators []Indicator
 
+	found := make(map[int]bool)
 	for _, acc := range allAccounts {
 		if id, ok := accountIndicators[acc.Name]; ok {
 			indicators = append(indicators, NewIndicator(id, acc.TotalEURMTL, "", ""))
+			found[id] = true
 		}
 	}
 
-	// I61: BTC rate — from external quotes (stored as EURMTL value of BTC in snapshot tokens)
+	// Emit zero-value indicators for any accounts not found in data
+	for name, id := range accountIndicators {
+		if !found[id] {
+			slog.Warn("account not found in fund data, emitting zero indicator",
+				"account", name, "indicatorID", id)
+			indicators = append(indicators, NewIndicator(id, decimal.Zero, "", ""))
+		}
+	}
+
+	// I61: BTC rate — from BTC/WBTC market price in portfolio tokens
 	btcPrice := findBTCPrice(allAccounts)
 	indicators = append(indicators, NewIndicator(61, btcPrice, "", ""))
 
