@@ -209,26 +209,6 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 		valueXLM = domain.MultiplyWithPrecision(priceXLM, balance)
 	}
 
-	// Get full-balance value if amount != 1
-	bal, balErr := decimal.NewFromString(balance)
-	if balErr != nil {
-		slog.Warn("unparseable balance", "asset", asset.Code, "balance", balance, "error", balErr)
-	}
-	if balErr == nil && !bal.IsZero() && !bal.Equal(decimal.NewFromInt(1)) {
-		if priceEURMTL != "" {
-			fullResult, fullErr := s.GetPrice(ctx, asset, domain.EURMTLAsset(), balance)
-			if fullErr == nil {
-				valueEURMTL = fullResult.DestinationAmount
-			}
-		}
-		if priceXLM != "" {
-			fullResult, fullErr := s.GetPrice(ctx, asset, domain.XLMAsset(), balance)
-			if fullErr == nil {
-				valueXLM = fullResult.DestinationAmount
-			}
-		}
-	}
-
 	if eurmtlErr != nil && xlmErr != nil {
 		return "", "", "", "", nil, nil, fmt.Errorf("both EURMTL and XLM price lookups failed: eurmtl: %w, xlm: %v", eurmtlErr, xlmErr)
 	}

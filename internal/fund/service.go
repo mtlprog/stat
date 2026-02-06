@@ -148,10 +148,7 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accountID string, accountValuations []domain.AssetValuation) (domain.TokenPriceWithBalance, error) {
 	isNFT := valuation.IsNFT(tb.Balance)
 
-	priceEURMTL, priceXLM, valueEURMTL, valueXLM, detailsEURMTL, detailsXLM, err := s.price.GetTokenPrices(ctx, tb.Asset, tb.Balance)
-	if err != nil {
-		return domain.TokenPriceWithBalance{}, err
-	}
+	priceEURMTL, priceXLM, valueEURMTL, valueXLM, detailsEURMTL, detailsXLM, priceErr := s.price.GetTokenPrices(ctx, tb.Asset, tb.Balance)
 
 	result := domain.TokenPriceWithBalance{
 		Asset:         tb.Asset,
@@ -187,7 +184,9 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 			result.NFTValuationAccount = val.SourceAccount
 
 			// Derive XLM value from EURMTL valuation
-			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
+			// Use XLM→EURMTL rate (xlmPriceInEURMTL) so that:
+			//   priceInXLM = priceInEURMTL / xlmPriceInEURMTL
+			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.XLMAsset(), domain.EURMTLAsset(), "1")
 			if xlmErr != nil {
 				slog.Warn("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)
 			} else {
@@ -200,7 +199,14 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 					result.ValueInXLM = &xlmVal
 				}
 			}
+
+			// Manual valuation resolved successfully; market price error is irrelevant
+			priceErr = nil
 		}
+	}
+
+	if priceErr != nil {
+		return domain.TokenPriceWithBalance{}, priceErr
 	}
 
 	return result, nil
