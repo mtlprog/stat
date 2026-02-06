@@ -58,6 +58,7 @@ var (
 )
 
 // FetchPrices fetches EUR prices for all configured symbols from CoinGecko.
+// EURMTL is treated as 1:1 with EUR for external price resolution.
 func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.Decimal, error) {
 	// Collect unique CoinGecko IDs
 	uniqueIDs := make(map[string]bool)

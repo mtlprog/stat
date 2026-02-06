@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/mtlprog/stat/internal/domain"
@@ -29,13 +29,13 @@ func NewReportWorker(generator SnapshotGenerator, interval time.Duration) *Repor
 
 // Run starts the report worker loop. It blocks until the context is cancelled.
 func (w *ReportWorker) Run(ctx context.Context) {
-	log.Println("ReportWorker: starting")
+	slog.Info("ReportWorker: starting")
 
 	// Generate immediately on startup
 	if _, err := w.generator.Generate(ctx, "mtlf", time.Now()); err != nil {
-		log.Printf("ReportWorker: initial generation failed: %v", err)
+		slog.Error("ReportWorker: initial generation failed", "error", err)
 	} else {
-		log.Println("ReportWorker: initial generation completed")
+		slog.Info("ReportWorker: initial generation completed")
 	}
 
 	ticker := time.NewTicker(w.interval)
@@ -44,13 +44,13 @@ func (w *ReportWorker) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("ReportWorker: shutting down")
+			slog.Info("ReportWorker: shutting down")
 			return
 		case <-ticker.C:
 			if _, err := w.generator.Generate(ctx, "mtlf", time.Now()); err != nil {
-				log.Printf("ReportWorker: generation failed: %v", err)
+				slog.Error("ReportWorker: generation failed", "error", err)
 			} else {
-				log.Println("ReportWorker: generation completed")
+				slog.Info("ReportWorker: generation completed")
 			}
 		}
 	}

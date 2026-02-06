@@ -18,7 +18,7 @@ func (c *DividendCalculator) Calculate(_ context.Context, _ domain.FundStructure
 	i5 := deps[5].Value   // Total Shares
 	i10 := deps[10].Value // Share Market Price
 
-	// I11: Monthly Dividends (placeholder — requires payment history from Horizon)
+	// I11: Monthly Dividends (placeholder — returns zero, requires payment history from Horizon)
 	i11 := decimal.Zero
 
 	// I15: DPS = I11 / I5
@@ -27,13 +27,13 @@ func (c *DividendCalculator) Calculate(_ context.Context, _ domain.FundStructure
 		i15 = i11.Div(i5)
 	}
 
-	// I54: Annual DPS (sum of 12 monthly DPS from historical snapshots)
+	// I54: Annual DPS (placeholder — returns zero, requires sum of 12 monthly DPS from historical snapshots)
 	i54 := decimal.Zero
 
-	// I55: Price year ago (from historical snapshot)
+	// I55: Price year ago (placeholder — returns zero, requires historical snapshot)
 	i55 := decimal.Zero
 
-	// I16: ADY1 (Annual Dividend Yield forecast)
+	// I16: ADY1 (placeholder — returns zero, Annual Dividend Yield forecast)
 	i16 := decimal.Zero
 
 	// I17: ADY2 = (I54 / I55) * 100
@@ -42,7 +42,7 @@ func (c *DividendCalculator) Calculate(_ context.Context, _ domain.FundStructure
 		i17 = i54.Div(i55).Mul(decimal.NewFromInt(100))
 	}
 
-	// I33: EPS = median(monthly_divs) * 12 / I5
+	// I33: EPS (placeholder — returns zero, requires median of monthly dividends)
 	i33 := decimal.Zero
 
 	// I34: P/E = I10 / I54

@@ -42,6 +42,15 @@ func AssetTypeFromCode(code string) AssetType {
 	return AssetTypeCreditAlphanum12
 }
 
+// NewAssetInfo creates an AssetInfo with the correct type inferred from the code.
+func NewAssetInfo(code, issuer string) AssetInfo {
+	return AssetInfo{
+		Code:   code,
+		Issuer: issuer,
+		Type:   AssetTypeFromCode(code),
+	}
+}
+
 // IssuerAddress is the Stellar address of the main fund issuer.
 const IssuerAddress = "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"
 

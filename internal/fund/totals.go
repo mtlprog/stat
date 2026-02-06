@@ -13,9 +13,9 @@ import (
 func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalance string, xlmPriceInEURMTL *string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
 		if t.IsNFT {
-			return domain.SafeSum(acc, domain.SafeParse(domain.PtrToString(t.PriceInEURMTL)))
+			return domain.SafeSum(acc, domain.SafeParse(lo.FromPtr(t.PriceInEURMTL)))
 		}
-		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, domain.PtrToString(t.PriceInEURMTL)))
+		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, lo.FromPtr(t.PriceInEURMTL)))
 	}, decimal.Zero)
 
 	// Add XLM value
@@ -31,9 +31,9 @@ func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalan
 func calculateAccountTotalXLM(tokens []domain.TokenPriceWithBalance, xlmBalance string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
 		if t.IsNFT {
-			return domain.SafeSum(acc, domain.SafeParse(domain.PtrToString(t.PriceInXLM)))
+			return domain.SafeSum(acc, domain.SafeParse(lo.FromPtr(t.PriceInXLM)))
 		}
-		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, domain.PtrToString(t.PriceInXLM)))
+		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, lo.FromPtr(t.PriceInXLM)))
 	}, decimal.Zero)
 
 	// Add XLM balance directly (it IS the native asset)

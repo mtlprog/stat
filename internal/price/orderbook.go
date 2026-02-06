@@ -18,7 +18,7 @@ func (s *Service) getOrderbookPrice(ctx context.Context, source, dest domain.Ass
 		return domain.TokenPairPrice{}, err
 	}
 
-	// Select best price: bid preferred over ask (Section 3.3.2)
+	// Select best price: bid preferred over ask
 	var priceStr string
 	var priceType string
 
@@ -51,10 +51,10 @@ func (s *Service) getOrderbookPrice(ctx context.Context, source, dest domain.Ass
 		Price:             priceStr,
 		DestinationAmount: priceStr,
 		Timestamp:         time.Now(),
-		Details: &domain.OrderbookDetails{
+		Details: &domain.PriceDetails{
 			Source:        "orderbook",
 			PriceType:     priceType,
-			OrderbookData: obData,
+			OrderbookData: &obData,
 		},
 	}, nil
 }
@@ -91,7 +91,7 @@ func (s *Service) fetchOrderbookData(ctx context.Context, source, dest domain.As
 		}
 	}
 
-	// Select best source: lower ask wins (Section 3.3.4)
+	// Select best source: lower ask wins (traditional orderbook vs AMM)
 	obHasPrice := data.Orderbook.Ask != nil || data.Orderbook.Bid != nil
 	ammHasPrice := data.AMM.Ask != nil
 
@@ -139,7 +139,7 @@ func calculateAMMSpot(pool horizon.HorizonLiquidityPool, source domain.AssetInfo
 		return nil
 	}
 
-	// spotPrice = reserveB / reserveA (Section 3.3.3)
+	// spotPrice = reserveB / reserveA (constant product AMM formula)
 	spot := reserveB.Div(reserveA).String()
 	return &spot
 }

@@ -15,6 +15,16 @@ import (
 // ErrNoPrice indicates that no price could be determined.
 var ErrNoPrice = errors.New("no price available")
 
+// TokenPriceResult holds the EURMTL and XLM prices/values for a token.
+type TokenPriceResult struct {
+	PriceEURMTL   string
+	PriceXLM      string
+	ValueEURMTL   string
+	ValueXLM      string
+	DetailsEURMTL *domain.PriceDetails
+	DetailsXLM    *domain.PriceDetails
+}
+
 // Service implements token price discovery.
 type Service struct {
 	horizon HorizonClient
@@ -53,6 +63,22 @@ func (s *Service) GetPrice(ctx context.Context, asset, baseAsset domain.AssetInf
 
 	s.cache.set(key, result)
 	return result, nil
+}
+
+// GetBidPrice fetches the best bid price from the orderbook for the given asset pair.
+func (s *Service) GetBidPrice(ctx context.Context, asset, baseAsset domain.AssetInfo) (decimal.Decimal, error) {
+	ob, err := s.horizon.FetchOrderbook(ctx, asset, baseAsset, 1)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("fetching orderbook for bid: %w", err)
+	}
+	if len(ob.Bids) == 0 {
+		return decimal.Zero, ErrNoPrice
+	}
+	price, err := decimal.NewFromString(ob.Bids[0].Price)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("parsing bid price: %w", err)
+	}
+	return price, nil
 }
 
 // getSpotPrice queries both path finding and orderbook, returning the higher price.
@@ -120,21 +146,20 @@ func (s *Service) getSpotPrice(ctx context.Context, asset, baseAsset domain.Asse
 			Price:             pathResult.price.Price,
 			DestinationAmount: pathResult.price.DestinationAmount,
 			Timestamp:         time.Now(),
-			Details: &domain.BestDetails{
-				Source:           "best",
-				PathPrice:        &pathPriceStr,
-				OrderbookPrice:   &obPriceStr,
-				ChosenSource:     "path",
-				PathDetails:      toPathDetails(pathResult.price.Details),
-				OrderbookDetails: toOrderbookDetails(obResult.price.Details),
+			Details: &domain.PriceDetails{
+				Source:         "best",
+				PathPrice:      &pathPriceStr,
+				OrderbookPrice: &obPriceStr,
+				ChosenSource:   "path",
+				PathSubDetails: pathResult.price.Details,
+				OBSubDetails:   obResult.price.Details,
 			},
 		}, nil
 	}
 
-	obDetails := toOrderbookDetails(obResult.price.Details)
 	var priceType string
-	if obDetails != nil {
-		priceType = obDetails.PriceType
+	if obResult.price.Details != nil {
+		priceType = obResult.price.Details.PriceType
 	}
 
 	return domain.TokenPairPrice{
@@ -143,34 +168,32 @@ func (s *Service) getSpotPrice(ctx context.Context, asset, baseAsset domain.Asse
 		Price:             obResult.price.Price,
 		DestinationAmount: obResult.price.DestinationAmount,
 		Timestamp:         time.Now(),
-		Details: &domain.BestDetails{
-			Source:           "best",
-			PriceType:        priceType,
-			PathPrice:        &pathPriceStr,
-			OrderbookPrice:   &obPriceStr,
-			ChosenSource:     "orderbook",
-			PathDetails:      toPathDetails(pathResult.price.Details),
-			OrderbookDetails: obDetails,
+		Details: &domain.PriceDetails{
+			Source:         "best",
+			PriceType:      priceType,
+			PathPrice:      &pathPriceStr,
+			OrderbookPrice: &obPriceStr,
+			ChosenSource:   "orderbook",
+			PathSubDetails: pathResult.price.Details,
+			OBSubDetails:   obResult.price.Details,
 		},
 	}, nil
 }
 
 // GetTokenPrices returns EURMTL and XLM prices/values for a token, including cross-rate derivation.
-func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, balance string) (
-	priceEURMTL, priceXLM, valueEURMTL, valueXLM string,
-	detailsEURMTL, detailsXLM domain.PriceDetails,
-	err error,
-) {
+func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, balance string) (TokenPriceResult, error) {
+	var result TokenPriceResult
+
 	eurmtlResult, eurmtlErr := s.GetPrice(ctx, asset, domain.EURMTLAsset(), "1")
 	if eurmtlErr == nil {
-		priceEURMTL = eurmtlResult.Price
-		detailsEURMTL = eurmtlResult.Details
+		result.PriceEURMTL = eurmtlResult.Price
+		result.DetailsEURMTL = eurmtlResult.Details
 	}
 
 	xlmResult, xlmErr := s.GetPrice(ctx, asset, domain.XLMAsset(), "1")
 	if xlmErr == nil {
-		priceXLM = xlmResult.Price
-		detailsXLM = xlmResult.Details
+		result.PriceXLM = xlmResult.Price
+		result.DetailsXLM = xlmResult.Details
 	}
 
 	// Cross-rate calculation: derive missing price via EURMTL/XLM rate
@@ -183,55 +206,35 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 			} else if !rate.IsZero() {
 				if eurmtlErr == nil && xlmErr != nil {
 					// Have EURMTL, derive XLM
-					eurmtlPrice, parseErr := decimal.NewFromString(priceEURMTL)
+					eurmtlPrice, parseErr := decimal.NewFromString(result.PriceEURMTL)
 					if parseErr != nil {
-						slog.Warn("cross-rate: EURMTL price unparseable", "asset", asset.Code, "price", priceEURMTL, "error", parseErr)
+						slog.Warn("cross-rate: EURMTL price unparseable", "asset", asset.Code, "price", result.PriceEURMTL, "error", parseErr)
 					} else {
-						priceXLM = eurmtlPrice.Mul(rate).String()
+						result.PriceXLM = eurmtlPrice.Mul(rate).String()
 					}
 				} else {
 					// Have XLM, derive EURMTL
-					xlmPrice, parseErr := decimal.NewFromString(priceXLM)
+					xlmPrice, parseErr := decimal.NewFromString(result.PriceXLM)
 					if parseErr != nil {
-						slog.Warn("cross-rate: XLM price unparseable", "asset", asset.Code, "price", priceXLM, "error", parseErr)
+						slog.Warn("cross-rate: XLM price unparseable", "asset", asset.Code, "price", result.PriceXLM, "error", parseErr)
 					} else {
-						priceEURMTL = xlmPrice.Div(rate).String()
+						result.PriceEURMTL = xlmPrice.Div(rate).String()
 					}
 				}
 			}
 		}
 	}
 
-	if priceEURMTL != "" {
-		valueEURMTL = domain.MultiplyWithPrecision(priceEURMTL, balance)
+	if result.PriceEURMTL != "" {
+		result.ValueEURMTL = domain.MultiplyWithPrecision(result.PriceEURMTL, balance)
 	}
-	if priceXLM != "" {
-		valueXLM = domain.MultiplyWithPrecision(priceXLM, balance)
+	if result.PriceXLM != "" {
+		result.ValueXLM = domain.MultiplyWithPrecision(result.PriceXLM, balance)
 	}
 
 	if eurmtlErr != nil && xlmErr != nil {
-		return "", "", "", "", nil, nil, fmt.Errorf("both EURMTL and XLM price lookups failed: eurmtl: %w, xlm: %v", eurmtlErr, xlmErr)
+		return TokenPriceResult{}, fmt.Errorf("both EURMTL and XLM price lookups failed: eurmtl: %w, xlm: %v", eurmtlErr, xlmErr)
 	}
 
-	return priceEURMTL, priceXLM, valueEURMTL, valueXLM, detailsEURMTL, detailsXLM, nil
-}
-
-func toPathDetails(d domain.PriceDetails) *domain.PathDetails {
-	if d == nil {
-		return nil
-	}
-	if pd, ok := d.(*domain.PathDetails); ok {
-		return pd
-	}
-	return nil
-}
-
-func toOrderbookDetails(d domain.PriceDetails) *domain.OrderbookDetails {
-	if d == nil {
-		return nil
-	}
-	if od, ok := d.(*domain.OrderbookDetails); ok {
-		return od
-	}
-	return nil
+	return result, nil
 }

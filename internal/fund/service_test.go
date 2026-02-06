@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/mtlprog/stat/internal/domain"
+	"github.com/mtlprog/stat/internal/price"
 )
 
 type mockPortfolio struct {
@@ -27,10 +28,13 @@ func (m *mockPrice) GetPrice(_ context.Context, _, _ domain.AssetInfo, _ string)
 	return domain.TokenPairPrice{Price: "0.5"}, nil
 }
 
-func (m *mockPrice) GetTokenPrices(_ context.Context, asset domain.AssetInfo, _ string) (
-	string, string, string, string, domain.PriceDetails, domain.PriceDetails, error,
-) {
-	return "2.0", "10.0", "20.0", "100.0", nil, nil, nil
+func (m *mockPrice) GetTokenPrices(_ context.Context, _ domain.AssetInfo, _ string) (price.TokenPriceResult, error) {
+	return price.TokenPriceResult{
+		PriceEURMTL: "2.0",
+		PriceXLM:    "10.0",
+		ValueEURMTL: "20.0",
+		ValueXLM:    "100.0",
+	}, nil
 }
 
 type mockValuation struct {

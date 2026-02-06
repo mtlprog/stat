@@ -49,7 +49,7 @@ func ScanAccountValuations(ctx context.Context, fetcher AccountFetcher, accountI
 
 		parsed, err := ParseDataEntryValue(string(decoded))
 		if err != nil {
-			slog.Info("skipping unparseable cost DATA entry",
+			slog.Warn("skipping unparseable cost DATA entry",
 				"account", accountID, "key", key, "value", string(decoded), "error", err)
 			continue
 		}

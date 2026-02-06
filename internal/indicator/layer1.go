@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 
 	"github.com/mtlprog/stat/internal/domain"
@@ -82,7 +83,7 @@ func calculateOperatingBalance(data domain.FundStructureData) decimal.Decimal {
 					total = total.Add(domain.SafeParse(token.Balance))
 				}
 			}
-			xlmPrice := domain.SafeParse(domain.PtrToString(acc.XLMPriceInEURMTL))
+			xlmPrice := domain.SafeParse(lo.FromPtr(acc.XLMPriceInEURMTL))
 			xlmBal := domain.SafeParse(acc.XLMBalance)
 			total = total.Add(xlmBal.Mul(xlmPrice))
 		}

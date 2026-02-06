@@ -56,14 +56,6 @@ func DivideWithPrecision(a, b string) string {
 	return formatStellar(result)
 }
 
-// PtrToString dereferences a string pointer, returning empty string if nil.
-func PtrToString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 // formatStellar rounds to 7 decimal places and strips trailing zeros.
 func formatStellar(d decimal.Decimal) string {
 	rounded := d.Round(stellarPrecision)

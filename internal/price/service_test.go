@@ -73,12 +73,11 @@ func TestGetPriceSpotPathWins(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	details, ok := result.Details.(*domain.BestDetails)
-	if !ok {
-		t.Fatal("expected BestDetails")
+	if result.Details == nil || result.Details.Source != "best" {
+		t.Fatal("expected PriceDetails with Source=best")
 	}
-	if details.ChosenSource != "path" {
-		t.Errorf("ChosenSource = %q, want path (0.5 > 0.4)", details.ChosenSource)
+	if result.Details.ChosenSource != "path" {
+		t.Errorf("ChosenSource = %q, want path (0.5 > 0.4)", result.Details.ChosenSource)
 	}
 }
 
@@ -100,17 +99,15 @@ func TestGetPriceSpotOrderbookWins(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	details, ok := result.Details.(*domain.BestDetails)
-	if !ok {
-		t.Fatal("expected BestDetails")
+	if result.Details == nil || result.Details.Source != "best" {
+		t.Fatal("expected PriceDetails with Source=best")
 	}
-	if details.ChosenSource != "orderbook" {
-		t.Errorf("ChosenSource = %q, want orderbook (0.6 > 0.5)", details.ChosenSource)
+	if result.Details.ChosenSource != "orderbook" {
+		t.Errorf("ChosenSource = %q, want orderbook (0.6 > 0.5)", result.Details.ChosenSource)
 	}
 }
 
 func TestGetPriceCacheHit(t *testing.T) {
-	callCount := 0
 	mock := &mockHorizon{
 		strictSendPaths: []horizon.HorizonPathRecord{
 			{SourceAmount: "100", DestinationAmount: "50"},
@@ -126,7 +123,6 @@ func TestGetPriceCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	callCount++
 
 	// Second call should hit cache
 	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "100")
@@ -182,12 +178,14 @@ func TestGetPriceAMMSelection(t *testing.T) {
 
 	// AMM spot = 600/1000 = 0.6, Orderbook ask = 0.8
 	// AMM ask (0.6) < orderbook ask (0.8), so AMM wins
-	details, ok := result.Details.(*domain.OrderbookDetails)
-	if !ok {
-		t.Fatal("expected OrderbookDetails")
+	if result.Details == nil || result.Details.Source != "orderbook" {
+		t.Fatal("expected PriceDetails with Source=orderbook")
 	}
-	if details.OrderbookData.BestSource != "amm" {
-		t.Errorf("BestSource = %q, want amm (0.6 < 0.8)", details.OrderbookData.BestSource)
+	if result.Details.OrderbookData == nil {
+		t.Fatal("expected OrderbookData to be non-nil")
+	}
+	if result.Details.OrderbookData.BestSource != "amm" {
+		t.Errorf("BestSource = %q, want amm (0.6 < 0.8)", result.Details.OrderbookData.BestSource)
 	}
 }
 
@@ -202,21 +200,16 @@ func TestGetTokenPricesCrossRateFromEURMTL(t *testing.T) {
 	}
 
 	svc := NewService(mock)
-	// Override the internal behavior: first call (EURMTL) succeeds, second (XLM) fails
-	// We need separate mock behavior per asset pair. Since mockHorizon returns same paths
-	// for all calls, we'll test through the public API and verify non-empty cross-rate result.
 
-	priceEURMTL, priceXLM, _, _, _, _, err := svc.GetTokenPrices(
-		context.Background(), testAsset(), "100",
-	)
+	result, err := svc.GetTokenPrices(context.Background(), testAsset(), "100")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if priceEURMTL == "" {
+	if result.PriceEURMTL == "" {
 		t.Error("expected non-empty EURMTL price")
 	}
 	// XLM price should also be available (either direct or via cross-rate)
-	if priceXLM == "" {
+	if result.PriceXLM == "" {
 		t.Error("expected non-empty XLM price (direct or cross-rate)")
 	}
 }
@@ -230,9 +223,7 @@ func TestGetTokenPricesBothFail(t *testing.T) {
 	}
 
 	svc := NewService(mock)
-	_, _, _, _, _, _, err := svc.GetTokenPrices(
-		context.Background(), testAsset(), "100",
-	)
+	_, err := svc.GetTokenPrices(context.Background(), testAsset(), "100")
 	if err == nil {
 		t.Error("expected error when both EURMTL and XLM lookups fail")
 	}

@@ -122,7 +122,10 @@ func (r *Registry) Register(calc Calculator) {
 
 // CalculateAll runs all registered calculators in dependency order.
 func (r *Registry) CalculateAll(ctx context.Context, data domain.FundStructureData, hist *HistoricalData) ([]Indicator, error) {
-	ordered := r.topologicalSort()
+	ordered, err := r.topologicalSort()
+	if err != nil {
+		return nil, fmt.Errorf("sorting calculators: %w", err)
+	}
 
 	computed := make(map[int]Indicator)
 	var allIndicators []Indicator
@@ -154,7 +157,8 @@ func (r *Registry) CalculateAll(ctx context.Context, data domain.FundStructureDa
 }
 
 // topologicalSort orders calculators so dependencies come first.
-func (r *Registry) topologicalSort() []Calculator {
+// Returns an error if a dependency cycle is detected.
+func (r *Registry) topologicalSort() ([]Calculator, error) {
 	// Build dependency graph
 	calcByID := make(map[int]Calculator)
 	for _, calc := range r.calculators {
@@ -164,27 +168,38 @@ func (r *Registry) topologicalSort() []Calculator {
 	}
 
 	visited := make(map[Calculator]bool)
+	inProgress := make(map[Calculator]bool)
 	var ordered []Calculator
 
-	var visit func(calc Calculator)
-	visit = func(calc Calculator) {
+	var visit func(calc Calculator) error
+	visit = func(calc Calculator) error {
 		if visited[calc] {
-			return
+			return nil
 		}
-		visited[calc] = true
+		if inProgress[calc] {
+			return fmt.Errorf("dependency cycle detected involving indicators %v", calc.IDs())
+		}
+		inProgress[calc] = true
 
 		for _, dep := range calc.Dependencies() {
 			if depCalc, ok := calcByID[dep]; ok {
-				visit(depCalc)
+				if err := visit(depCalc); err != nil {
+					return err
+				}
 			}
 		}
 
+		delete(inProgress, calc)
+		visited[calc] = true
 		ordered = append(ordered, calc)
+		return nil
 	}
 
 	for _, calc := range r.calculators {
-		visit(calc)
+		if err := visit(calc); err != nil {
+			return nil, err
+		}
 	}
 
-	return lo.Uniq(ordered)
+	return lo.Uniq(ordered), nil
 }

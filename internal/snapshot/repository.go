@@ -139,7 +139,7 @@ func (r *PgRepository) EnsureEntity(ctx context.Context, slug, name, description
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO fund_entities (slug, name, description)
 		 VALUES ($1, $2, $3)
-		 ON CONFLICT (slug) DO UPDATE SET name = $2
+		 ON CONFLICT (slug) DO UPDATE SET name = $2, description = $3, updated_at = NOW()
 		 RETURNING id`,
 		slug, name, description).Scan(&id)
 	if err != nil {

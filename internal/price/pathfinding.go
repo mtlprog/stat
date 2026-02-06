@@ -2,6 +2,7 @@ package price
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -15,7 +16,10 @@ import (
 func (s *Service) getPathPrice(ctx context.Context, source, dest domain.AssetInfo, amount string) (domain.TokenPairPrice, error) {
 	// Try strictSend first
 	paths, err := s.horizon.FetchStrictSendPaths(ctx, source, amount, dest)
-	if err == nil && len(paths) > 0 {
+	if err != nil {
+		slog.Warn("strictSend failed, trying strictReceive",
+			"source", source.Code, "dest", dest.Code, "error", err)
+	} else if len(paths) > 0 {
 		if price, ok := pathRecordToPrice(paths[0], source, dest); ok {
 			return price, nil
 		}
@@ -39,12 +43,21 @@ func (s *Service) getPathPrice(ctx context.Context, source, dest domain.AssetInf
 
 func pathRecordToPrice(record horizon.HorizonPathRecord, source, dest domain.AssetInfo) (domain.TokenPairPrice, bool) {
 	srcAmount, err := decimal.NewFromString(record.SourceAmount)
-	if err != nil || srcAmount.IsZero() {
+	if err != nil {
+		slog.Warn("pathRecordToPrice: unparseable source amount",
+			"source", source.Code, "dest", dest.Code, "value", record.SourceAmount, "error", err)
+		return domain.TokenPairPrice{}, false
+	}
+	if srcAmount.IsZero() {
+		slog.Warn("pathRecordToPrice: zero source amount",
+			"source", source.Code, "dest", dest.Code)
 		return domain.TokenPairPrice{}, false
 	}
 
 	destAmount, err := decimal.NewFromString(record.DestinationAmount)
 	if err != nil {
+		slog.Warn("pathRecordToPrice: unparseable destination amount",
+			"source", source.Code, "dest", dest.Code, "value", record.DestinationAmount, "error", err)
 		return domain.TokenPairPrice{}, false
 	}
 
@@ -59,7 +72,7 @@ func pathRecordToPrice(record horizon.HorizonPathRecord, source, dest domain.Ass
 		Price:             price.String(),
 		DestinationAmount: record.DestinationAmount,
 		Timestamp:         time.Now(),
-		Details: &domain.PathDetails{
+		Details: &domain.PriceDetails{
 			Source:            "path",
 			SourceAmount:      &srcAmountStr,
 			DestinationAmount: &destAmountStr,

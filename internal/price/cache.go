@@ -32,11 +32,15 @@ func cacheKey(source, dest domain.AssetInfo, amount string) string {
 }
 
 func (c *priceCache) get(key string) (domain.TokenPairPrice, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	entry, ok := c.entries[key]
-	if !ok || time.Now().After(entry.expiresAt) {
+	if !ok {
+		return domain.TokenPairPrice{}, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key)
 		return domain.TokenPairPrice{}, false
 	}
 	return entry.price, true

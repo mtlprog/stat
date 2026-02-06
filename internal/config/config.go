@@ -20,6 +20,7 @@ type Config struct {
 	QuoteWorkerInterval   time.Duration
 	ReportWorkerInterval  time.Duration
 	HTTPPort              string
+	AdminAPIKey           string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -36,6 +37,7 @@ func Load() Config {
 		QuoteWorkerInterval:   envOrDefaultDuration("QUOTE_WORKER_INTERVAL", 1*time.Hour),
 		ReportWorkerInterval:  envOrDefaultDuration("REPORT_WORKER_INTERVAL", 24*time.Hour),
 		HTTPPort:              envOrDefault("HTTP_PORT", "8080"),
+		AdminAPIKey:           os.Getenv("ADMIN_API_KEY"),
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 type AnalyticsCalculator struct{}
 
 func (c *AnalyticsCalculator) IDs() []int          { return []int{43, 44, 45, 46, 47, 48} }
-func (c *AnalyticsCalculator) Dependencies() []int { return []int{3, 5, 10, 54, 55, 61} }
+func (c *AnalyticsCalculator) Dependencies() []int { return []int{3, 5, 10, 54, 55} }
 
 func (c *AnalyticsCalculator) Calculate(_ context.Context, _ domain.FundStructureData, deps map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
 	i10 := deps[10].Value // Share Market Price
