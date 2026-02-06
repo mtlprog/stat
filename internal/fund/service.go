@@ -55,7 +55,7 @@ func NewService(portfolio PortfolioService, price PriceService, val ValuationSer
 	}
 }
 
-// GetFundStructure runs the full fund aggregation pipeline (Section 6).
+// GetFundStructure runs the full fund aggregation pipeline.
 func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureData, error) {
 	allValuations, err := s.valuation.FetchAllValuations(ctx)
 	if err != nil {
@@ -189,7 +189,7 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 			// Derive XLM value from EURMTL valuation
 			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
 			if xlmErr != nil {
-				slog.Debug("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)
+				slog.Warn("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)
 			} else {
 				xlmPrice := domain.DivideWithPrecision(resolved.ValueInEURMTL, xlmRate.Price)
 				result.PriceInXLM = &xlmPrice

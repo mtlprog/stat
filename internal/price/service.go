@@ -15,7 +15,7 @@ import (
 // ErrNoPrice indicates that no price could be determined.
 var ErrNoPrice = errors.New("no price available")
 
-// Service implements token price discovery per Section 3.
+// Service implements token price discovery.
 type Service struct {
 	horizon HorizonClient
 	cache   *priceCache
@@ -95,7 +95,7 @@ func (s *Service) getSpotPrice(ctx context.Context, asset, baseAsset domain.Asse
 		return obResult.price, nil
 	}
 
-	// Both succeeded: choose the higher price (Section 3.4)
+	// Both succeeded: choose the higher price
 	pathPrice, pathParseErr := decimal.NewFromString(pathResult.price.Price)
 	obPrice, obParseErr := decimal.NewFromString(obResult.price.Price)
 
@@ -173,7 +173,7 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 		detailsXLM = xlmResult.Details
 	}
 
-	// Cross-rate calculation (Section 3.5)
+	// Cross-rate calculation: derive missing price via EURMTL/XLM rate
 	if (eurmtlErr == nil && xlmErr != nil) || (eurmtlErr != nil && xlmErr == nil) {
 		crossRate, crossErr := s.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
 		if crossErr == nil {

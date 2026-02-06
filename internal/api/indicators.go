@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -25,19 +27,26 @@ func NewIndicatorHandler(snapshots *snapshot.Service, indicators *indicator.Serv
 func (h *IndicatorHandler) GetIndicators(w http.ResponseWriter, r *http.Request) {
 	s, err := h.snapshots.GetLatest(r.Context(), "mtlf")
 	if err != nil {
-		writeError(w, http.StatusNotFound, "no snapshots found")
+		if errors.Is(err, snapshot.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no snapshots found")
+			return
+		}
+		slog.Error("failed to get latest snapshot", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	var data domain.FundStructureData
 	if err := json.Unmarshal(s.Data, &data); err != nil {
+		slog.Error("failed to parse snapshot data", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to parse snapshot data")
 		return
 	}
 
 	indicators, err := h.indicators.CalculateAll(r.Context(), data)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to calculate indicators: "+err.Error())
+		slog.Error("failed to calculate indicators", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -55,19 +64,26 @@ func (h *IndicatorHandler) GetIndicatorsByDate(w http.ResponseWriter, r *http.Re
 
 	s, err := h.snapshots.GetByDate(r.Context(), "mtlf", date)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "snapshot not found for date")
+		if errors.Is(err, snapshot.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "snapshot not found for date")
+			return
+		}
+		slog.Error("failed to get snapshot by date", "date", dateStr, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	var data domain.FundStructureData
 	if err := json.Unmarshal(s.Data, &data); err != nil {
+		slog.Error("failed to parse snapshot data", "date", dateStr, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to parse snapshot data")
 		return
 	}
 
 	indicators, err := h.indicators.CalculateAll(r.Context(), data)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to calculate indicators: "+err.Error())
+		slog.Error("failed to calculate indicators", "date", dateStr, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 

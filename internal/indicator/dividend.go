@@ -11,7 +11,7 @@ import (
 // DividendCalculator computes dividend-related indicators (I11, I15, I16, I17, I33, I34, I54, I55).
 type DividendCalculator struct{}
 
-func (c *DividendCalculator) IDs() []int          { return []int{11, 15, 33, 34, 54, 55, 16, 17} }
+func (c *DividendCalculator) IDs() []int          { return []int{11, 15, 16, 17, 33, 34, 54, 55} }
 func (c *DividendCalculator) Dependencies() []int { return []int{5, 10} }
 
 func (c *DividendCalculator) Calculate(_ context.Context, _ domain.FundStructureData, deps map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {

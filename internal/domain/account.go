@@ -26,7 +26,7 @@ type FundAccount struct {
 // accountRegistry holds all 11 fund accounts.
 // Unexported to prevent external mutation.
 var accountRegistry = []FundAccount{
-	// 6 main accounts (issuer + subfond + operational)
+	// 8 non-other accounts (1 issuer + 4 subfond + 1 operational + 2 mutual)
 	{Name: "MAIN ISSUER", Type: AccountTypeIssuer, Address: IssuerAddress, Description: "Main token issuer account"},
 	{Name: "MABIZ", Type: AccountTypeSubfond, Address: "GAQ5ERJVI6IW5UVNPEVXUUVMXH3GCDHJ4BJAXMAAKPR5VBWWAUOMABIZ", Description: "Sub-fund for business investments"},
 	{Name: "MCITY", Type: AccountTypeSubfond, Address: "GCOJHUKGHI6IATN7AIEK4PSNBPXIAIZ7KB2AWTTUCNIAYVPUB2DMCITY", Description: "Sub-fund for city development"},

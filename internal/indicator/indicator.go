@@ -51,7 +51,7 @@ var indicatorRegistry = map[int]IndicatorMeta{
 	45: {Name: "Sharpe Ratio", Unit: "ratio"},
 	46: {Name: "Sortino Ratio", Unit: "ratio"},
 	47: {Name: "Value at Risk", Unit: "%"},
-	48: {Name: "Earnings/Book Value", Unit: "ratio"},
+	48: {Name: "Dividend/Book Value", Unit: "ratio"},
 	49: {Name: "MTLRECT Market Price", Unit: "EURMTL"},
 	51: {Name: "DEFI Total Value", Unit: "EURMTL"},
 	52: {Name: "MCITY Total Value", Unit: "EURMTL"},

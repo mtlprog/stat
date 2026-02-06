@@ -2,6 +2,7 @@ package fund
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -32,15 +33,26 @@ func (m *mockPrice) GetTokenPrices(_ context.Context, asset domain.AssetInfo, _ 
 	return "2.0", "10.0", "20.0", "100.0", nil, nil, nil
 }
 
-type mockValuation struct{}
-
-func (m *mockValuation) FetchAllValuations(_ context.Context) ([]domain.AssetValuation, error) {
-	return nil, nil
+type mockValuation struct {
+	valuations []domain.AssetValuation
 }
 
-type mockExternal struct{}
+func (m *mockValuation) FetchAllValuations(_ context.Context) ([]domain.AssetValuation, error) {
+	return m.valuations, nil
+}
+
+type mockExternal struct {
+	resolved domain.ResolvedAssetValuation
+	err      error
+}
 
 func (m *mockExternal) ResolveValuation(_ context.Context, val domain.AssetValuation) (domain.ResolvedAssetValuation, error) {
+	if m.err != nil {
+		return domain.ResolvedAssetValuation{}, m.err
+	}
+	if m.resolved.ValueInEURMTL != "" {
+		return m.resolved, nil
+	}
 	return domain.ResolvedAssetValuation{AssetValuation: val, ValueInEURMTL: "100"}, nil
 }
 
@@ -86,6 +98,89 @@ func TestGetFundStructurePartitioning(t *testing.T) {
 	}
 	if result.AggregatedTotals.TotalEURMTL.Equal(decimal.Zero) {
 		t.Error("TotalEURMTL should be non-zero")
+	}
+}
+
+func TestPriceTokenNFTWithValuation(t *testing.T) {
+	svc := &Service{
+		price:    &mockPrice{},
+		external: &mockExternal{resolved: domain.ResolvedAssetValuation{ValueInEURMTL: "500"}},
+	}
+
+	tb := domain.TokenBalance{
+		Asset:   domain.AssetInfo{Code: "MYTOKEN", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum12},
+		Balance: "0.0000001", // NFT balance
+	}
+
+	accountValuations := []domain.AssetValuation{
+		{TokenCode: "MYTOKEN", ValuationType: domain.ValuationTypeNFT, RawValue: domain.ValuationValue{Type: domain.ValuationValueEURMTL, Value: "500"}, SourceAccount: "GACCOUNT"},
+	}
+
+	result, err := svc.priceToken(context.Background(), tb, "GACCOUNT", accountValuations)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.PriceInEURMTL == nil || *result.PriceInEURMTL != "500" {
+		t.Errorf("PriceInEURMTL = %v, want 500", result.PriceInEURMTL)
+	}
+	if result.NFTValuationAccount != "GACCOUNT" {
+		t.Errorf("NFTValuationAccount = %q, want GACCOUNT", result.NFTValuationAccount)
+	}
+}
+
+func TestPriceTokenRegularWithValuation(t *testing.T) {
+	svc := &Service{
+		price:    &mockPrice{},
+		external: &mockExternal{resolved: domain.ResolvedAssetValuation{ValueInEURMTL: "10"}},
+	}
+
+	tb := domain.TokenBalance{
+		Asset:   domain.AssetInfo{Code: "MYTOKEN", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum12},
+		Balance: "5.0000000",
+	}
+
+	accountValuations := []domain.AssetValuation{
+		{TokenCode: "MYTOKEN", ValuationType: domain.ValuationTypeUnit, RawValue: domain.ValuationValue{Type: domain.ValuationValueEURMTL, Value: "10"}, SourceAccount: "GACCOUNT"},
+	}
+
+	result, err := svc.priceToken(context.Background(), tb, "GACCOUNT", accountValuations)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// For regular tokens, value = balance * price = 5 * 10 = 50
+	if result.PriceInEURMTL == nil || *result.PriceInEURMTL != "10" {
+		t.Errorf("PriceInEURMTL = %v, want 10", result.PriceInEURMTL)
+	}
+	if result.ValueInEURMTL == nil || *result.ValueInEURMTL != "50" {
+		t.Errorf("ValueInEURMTL = %v, want 50", result.ValueInEURMTL)
+	}
+}
+
+func TestPriceTokenValuationResolutionFallback(t *testing.T) {
+	svc := &Service{
+		price:    &mockPrice{},
+		external: &mockExternal{err: errors.New("resolution failed")},
+	}
+
+	tb := domain.TokenBalance{
+		Asset:   domain.AssetInfo{Code: "MYTOKEN", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum12},
+		Balance: "0.0000001",
+	}
+
+	accountValuations := []domain.AssetValuation{
+		{TokenCode: "MYTOKEN", ValuationType: domain.ValuationTypeNFT, RawValue: domain.ValuationValue{Type: domain.ValuationValueEURMTL, Value: "500"}, SourceAccount: "GACCOUNT"},
+	}
+
+	result, err := svc.priceToken(context.Background(), tb, "GACCOUNT", accountValuations)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// When resolution fails, should fall back to market price from GetTokenPrices
+	if result.PriceInEURMTL == nil || *result.PriceInEURMTL != "2.0" {
+		t.Errorf("PriceInEURMTL = %v, want 2.0 (market price fallback)", result.PriceInEURMTL)
 	}
 }
 

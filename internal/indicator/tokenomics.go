@@ -2,6 +2,7 @@ package indicator
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/shopspring/decimal"
 
@@ -29,7 +30,9 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	i24 := decimal.Zero
 	if c.Horizon != nil {
 		count, err := c.Horizon.FetchAssetHolders(ctx, domain.EURMTLAsset())
-		if err == nil {
+		if err != nil {
+			slog.Warn("failed to fetch asset holders", "asset", "EURMTL", "error", err)
+		} else {
 			i24 = decimal.NewFromInt(int64(count))
 		}
 	}
@@ -66,7 +69,9 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	if c.Horizon != nil {
 		mtlapAsset := domain.AssetInfo{Code: "MTLAP", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum4}
 		count, err := c.Horizon.FetchAssetHolders(ctx, mtlapAsset)
-		if err == nil {
+		if err != nil {
+			slog.Warn("failed to fetch asset holders", "asset", "MTLAP", "error", err)
+		} else {
 			i40 = decimal.NewFromInt(int64(count))
 		}
 	}
