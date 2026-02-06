@@ -2,7 +2,9 @@ package valuation
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -27,7 +29,7 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 	accounts := domain.AccountRegistry()
 	var mu sync.Mutex
 	var allValuations []domain.AssetValuation
-	var firstErr error
+	var errs []error
 
 	sem := make(chan struct{}, 3)
 	var wg sync.WaitGroup
@@ -43,9 +45,8 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
+				slog.Warn("failed to scan valuations for account", "account", accountID, "error", err)
+				errs = append(errs, fmt.Errorf("account %s: %w", accountID, err))
 				return
 			}
 			allValuations = append(allValuations, vals...)
@@ -54,8 +55,8 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 
 	wg.Wait()
 
-	if firstErr != nil {
-		return nil, firstErr
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 
 	return deduplicateValuations(allValuations), nil
@@ -67,9 +68,20 @@ func deduplicateValuations(valuations []domain.AssetValuation) []domain.AssetVal
 	sort.Slice(valuations, func(i, j int) bool {
 		return valuations[i].SourceAccount < valuations[j].SourceAccount
 	})
-	return lo.UniqBy(valuations, func(v domain.AssetValuation) string {
-		return fmt.Sprintf("%s:%s", v.TokenCode, v.ValuationType)
-	})
+
+	seen := make(map[string]bool)
+	var result []domain.AssetValuation
+	for _, v := range valuations {
+		key := fmt.Sprintf("%s:%s", v.TokenCode, v.ValuationType)
+		if seen[key] {
+			slog.Info("dropping duplicate valuation",
+				"token", v.TokenCode, "type", v.ValuationType, "account", v.SourceAccount)
+			continue
+		}
+		seen[key] = true
+		result = append(result, v)
+	}
+	return result
 }
 
 // LookupValuation finds the best valuation for a given token based on its balance and owner account.

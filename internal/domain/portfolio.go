@@ -16,14 +16,14 @@ type AccountPortfolio struct {
 
 // TokenPriceWithBalance combines a token balance with its market price and value.
 type TokenPriceWithBalance struct {
-	Asset               AssetInfo    `json:"asset"`
-	Balance             string       `json:"balance"`
-	PriceInEURMTL       *string      `json:"priceInEURMTL"`
-	PriceInXLM          *string      `json:"priceInXLM"`
-	ValueInEURMTL       *string      `json:"valueInEURMTL"`
-	ValueInXLM          *string      `json:"valueInXLM"`
-	DetailsEURMTL       PriceDetails `json:"detailsEURMTL,omitempty"`
-	DetailsXLM          PriceDetails `json:"detailsXLM,omitempty"`
-	IsNFT               bool         `json:"isNFT,omitempty"`
-	NFTValuationAccount string       `json:"nftValuationAccount,omitempty"`
+	Asset               AssetInfo     `json:"asset"`
+	Balance             string        `json:"balance"`
+	PriceInEURMTL       *string       `json:"priceInEURMTL"`
+	PriceInXLM          *string       `json:"priceInXLM"`
+	ValueInEURMTL       *string       `json:"valueInEURMTL"`
+	ValueInXLM          *string       `json:"valueInXLM"`
+	DetailsEURMTL       *PriceDetails `json:"detailsEURMTL,omitempty"`
+	DetailsXLM          *PriceDetails `json:"detailsXLM,omitempty"`
+	IsNFT               bool          `json:"isNFT,omitempty"`
+	NFTValuationAccount string        `json:"nftValuationAccount,omitempty"`
 }

@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -27,13 +27,13 @@ func NewQuoteWorker(fetcher QuoteFetcher, interval time.Duration) *QuoteWorker {
 
 // Run starts the quote worker loop. It blocks until the context is cancelled.
 func (w *QuoteWorker) Run(ctx context.Context) {
-	log.Println("QuoteWorker: starting")
+	slog.Info("QuoteWorker: starting")
 
 	// Fetch immediately on startup
 	if err := w.fetcher.FetchAndStoreQuotes(ctx); err != nil {
-		log.Printf("QuoteWorker: initial fetch failed: %v", err)
+		slog.Error("QuoteWorker: initial fetch failed", "error", err)
 	} else {
-		log.Println("QuoteWorker: initial fetch completed")
+		slog.Info("QuoteWorker: initial fetch completed")
 	}
 
 	ticker := time.NewTicker(w.interval)
@@ -42,13 +42,13 @@ func (w *QuoteWorker) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("QuoteWorker: shutting down")
+			slog.Info("QuoteWorker: shutting down")
 			return
 		case <-ticker.C:
 			if err := w.fetcher.FetchAndStoreQuotes(ctx); err != nil {
-				log.Printf("QuoteWorker: fetch failed: %v", err)
+				slog.Error("QuoteWorker: fetch failed", "error", err)
 			} else {
-				log.Println("QuoteWorker: fetch completed")
+				slog.Info("QuoteWorker: fetch completed")
 			}
 		}
 	}

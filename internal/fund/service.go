@@ -9,6 +9,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/mtlprog/stat/internal/domain"
+	"github.com/mtlprog/stat/internal/price"
 	"github.com/mtlprog/stat/internal/valuation"
 )
 
@@ -20,11 +21,7 @@ type PortfolioService interface {
 // PriceService defines the price discovery interface.
 type PriceService interface {
 	GetPrice(ctx context.Context, asset, baseAsset domain.AssetInfo, amount string) (domain.TokenPairPrice, error)
-	GetTokenPrices(ctx context.Context, asset domain.AssetInfo, balance string) (
-		priceEURMTL, priceXLM, valueEURMTL, valueXLM string,
-		detailsEURMTL, detailsXLM domain.PriceDetails,
-		err error,
-	)
+	GetTokenPrices(ctx context.Context, asset domain.AssetInfo, balance string) (price.TokenPriceResult, error)
 }
 
 // ValuationService defines the valuation scanning interface.
@@ -45,11 +42,23 @@ type Service struct {
 	external  ExternalPriceService
 }
 
-// NewService creates a new fund structure Service.
-func NewService(portfolio PortfolioService, price PriceService, val ValuationService, ext ExternalPriceService) *Service {
+// NewService creates a new fund structure Service. All dependencies are required.
+func NewService(portfolio PortfolioService, priceSvc PriceService, val ValuationService, ext ExternalPriceService) *Service {
+	if portfolio == nil {
+		panic("fund.NewService: portfolio is nil")
+	}
+	if priceSvc == nil {
+		panic("fund.NewService: price is nil")
+	}
+	if val == nil {
+		panic("fund.NewService: valuation is nil")
+	}
+	if ext == nil {
+		panic("fund.NewService: external is nil")
+	}
 	return &Service{
 		portfolio: portfolio,
-		price:     price,
+		price:     priceSvc,
 		valuation: val,
 		external:  ext,
 	}
@@ -63,12 +72,14 @@ func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureDat
 	}
 
 	var allPortfolios []domain.FundAccountPortfolio
+	var warnings []string
 	for _, acc := range domain.AccountRegistry() {
-		portfolio, err := s.processAccount(ctx, acc, allValuations)
+		portfolio, accWarnings, err := s.processAccount(ctx, acc, allValuations)
 		if err != nil {
 			return domain.FundStructureData{}, fmt.Errorf("processing account %s: %w", acc.Name, err)
 		}
 		allPortfolios = append(allPortfolios, portfolio)
+		warnings = append(warnings, accWarnings...)
 
 		// 200ms delay between accounts
 		select {
@@ -85,26 +96,26 @@ func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureDat
 		MutualFunds:      mutualAccounts,
 		OtherAccounts:    otherAccounts,
 		AggregatedTotals: calculateFundTotals(mainAccounts),
+		Warnings:         warnings,
 	}, nil
 }
 
-func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, allValuations []domain.AssetValuation) (domain.FundAccountPortfolio, error) {
+func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, allValuations []domain.AssetValuation) (domain.FundAccountPortfolio, []string, error) {
 	rawPortfolio, err := s.portfolio.FetchPortfolio(ctx, acc.Address)
 	if err != nil {
-		return domain.FundAccountPortfolio{}, err
+		return domain.FundAccountPortfolio{}, nil, err
 	}
 
 	accountValuations := mergeValuations(acc.Address, allValuations)
 
 	var tokens []domain.TokenPriceWithBalance
+	var warnings []string
 	for _, tb := range rawPortfolio.Tokens {
 		token, err := s.priceToken(ctx, tb, acc.Address, accountValuations)
 		if err != nil {
-			slog.Warn("failed to price token, using zero value",
-				"account", acc.Name,
-				"asset", tb.Asset.Code,
-				"error", err,
-			)
+			w := fmt.Sprintf("failed to price %s on %s: %v", tb.Asset.Code, acc.Name, err)
+			slog.Warn(w)
+			warnings = append(warnings, w)
 			tokens = append(tokens, domain.TokenPriceWithBalance{
 				Asset:   tb.Asset,
 				Balance: tb.Balance,
@@ -116,7 +127,7 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 		// 100ms delay between tokens
 		select {
 		case <-ctx.Done():
-			return domain.FundAccountPortfolio{}, ctx.Err()
+			return domain.FundAccountPortfolio{}, nil, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -126,10 +137,9 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 	if err == nil {
 		xlmPriceInEURMTL = &xlmResult.Price
 	} else {
-		slog.Warn("failed to get XLM price, EURMTL totals will exclude XLM holdings",
-			"account", acc.Name,
-			"error", err,
-		)
+		w := fmt.Sprintf("XLM price unavailable for %s, EURMTL total excludes XLM", acc.Name)
+		slog.Warn(w, "error", err)
+		warnings = append(warnings, w)
 	}
 
 	return domain.FundAccountPortfolio{
@@ -142,23 +152,23 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 		XLMPriceInEURMTL: xlmPriceInEURMTL,
 		TotalEURMTL:      calculateAccountTotalEURMTL(tokens, rawPortfolio.XLMBalance, xlmPriceInEURMTL),
 		TotalXLM:         calculateAccountTotalXLM(tokens, rawPortfolio.XLMBalance),
-	}, nil
+	}, warnings, nil
 }
 
 func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accountID string, accountValuations []domain.AssetValuation) (domain.TokenPriceWithBalance, error) {
 	isNFT := valuation.IsNFT(tb.Balance)
 
-	priceEURMTL, priceXLM, valueEURMTL, valueXLM, detailsEURMTL, detailsXLM, priceErr := s.price.GetTokenPrices(ctx, tb.Asset, tb.Balance)
+	prices, priceErr := s.price.GetTokenPrices(ctx, tb.Asset, tb.Balance)
 
 	result := domain.TokenPriceWithBalance{
 		Asset:         tb.Asset,
 		Balance:       tb.Balance,
-		PriceInEURMTL: strToPtr(priceEURMTL),
-		PriceInXLM:    strToPtr(priceXLM),
-		ValueInEURMTL: strToPtr(valueEURMTL),
-		ValueInXLM:    strToPtr(valueXLM),
-		DetailsEURMTL: detailsEURMTL,
-		DetailsXLM:    detailsXLM,
+		PriceInEURMTL: strToPtr(prices.PriceEURMTL),
+		PriceInXLM:    strToPtr(prices.PriceXLM),
+		ValueInEURMTL: strToPtr(prices.ValueEURMTL),
+		ValueInXLM:    strToPtr(prices.ValueXLM),
+		DetailsEURMTL: prices.DetailsEURMTL,
+		DetailsXLM:    prices.DetailsXLM,
 		IsNFT:         isNFT,
 	}
 

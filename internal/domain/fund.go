@@ -29,4 +29,5 @@ type FundStructureData struct {
 	MutualFunds      []FundAccountPortfolio `json:"mutualFunds"`
 	OtherAccounts    []FundAccountPortfolio `json:"otherAccounts"`
 	AggregatedTotals AggregatedTotals       `json:"aggregatedTotals"`
+	Warnings         []string               `json:"warnings,omitempty"`
 }

@@ -16,12 +16,6 @@ type OrderbookData struct {
 	BestSource string      `json:"bestSource"` // "orderbook", "amm", or "none"
 }
 
-// PriceDetails is a discriminated union for price source metadata.
-// Implementations: PathDetails, OrderbookDetails, BestDetails.
-type PriceDetails interface {
-	PriceSource() string
-}
-
 // PathHop represents a single hop in a path finding route.
 type PathHop struct {
 	From      string         `json:"from"`
@@ -29,44 +23,28 @@ type PathHop struct {
 	Orderbook *OrderbookData `json:"orderbook,omitempty"`
 }
 
-// PathDetails contains metadata from path finding price discovery.
-type PathDetails struct {
-	Source            string    `json:"source"` // always "path"
-	SourceAmount      *string   `json:"sourceAmount,omitempty"`
-	DestinationAmount *string   `json:"destinationAmount,omitempty"`
-	Path              []PathHop `json:"path"`
+// PriceDetails is a concrete struct representing price source metadata.
+// The Source field discriminates between "path", "orderbook", and "best".
+type PriceDetails struct {
+	Source            string         `json:"source"`                      // "path", "orderbook", or "best"
+	PriceType         string         `json:"priceType,omitempty"`         // "bid" or "ask"
+	SourceAmount      *string        `json:"sourceAmount,omitempty"`      // path
+	DestinationAmount *string        `json:"destinationAmount,omitempty"` // path
+	Path              []PathHop      `json:"path,omitempty"`              // path
+	OrderbookData     *OrderbookData `json:"orderbookData,omitempty"`     // orderbook
+	PathPrice         *string        `json:"pathPrice,omitempty"`         // best
+	OrderbookPrice    *string        `json:"orderbookPrice,omitempty"`    // best
+	ChosenSource      string         `json:"chosenSource,omitempty"`      // best: "path" or "orderbook"
+	PathSubDetails    *PriceDetails  `json:"pathDetails,omitempty"`       // best
+	OBSubDetails      *PriceDetails  `json:"orderbookDetails,omitempty"`  // best
 }
-
-func (d *PathDetails) PriceSource() string { return "path" }
-
-// OrderbookDetails contains metadata from direct orderbook/AMM price discovery.
-type OrderbookDetails struct {
-	Source        string        `json:"source"`    // always "orderbook"
-	PriceType     string        `json:"priceType"` // "bid" or "ask"
-	OrderbookData OrderbookData `json:"orderbookData"`
-}
-
-func (d *OrderbookDetails) PriceSource() string { return "orderbook" }
-
-// BestDetails contains metadata when both path and orderbook sources are compared.
-type BestDetails struct {
-	Source           string            `json:"source"`    // always "best"
-	PriceType        string            `json:"priceType"` // "bid" or "ask"
-	PathPrice        *string           `json:"pathPrice"`
-	OrderbookPrice   *string           `json:"orderbookPrice"`
-	ChosenSource     string            `json:"chosenSource"` // "path" or "orderbook"
-	PathDetails      *PathDetails      `json:"pathDetails,omitempty"`
-	OrderbookDetails *OrderbookDetails `json:"orderbookDetails,omitempty"`
-}
-
-func (d *BestDetails) PriceSource() string { return "best" }
 
 // TokenPairPrice represents the price relationship between two tokens.
 type TokenPairPrice struct {
-	TokenA            string       `json:"tokenA"`
-	TokenB            string       `json:"tokenB"`
-	Price             string       `json:"price"`
-	DestinationAmount string       `json:"destinationAmount"`
-	Timestamp         time.Time    `json:"timestamp"`
-	Details           PriceDetails `json:"details,omitempty"`
+	TokenA            string        `json:"tokenA"`
+	TokenB            string        `json:"tokenB"`
+	Price             string        `json:"price"`
+	DestinationAmount string        `json:"destinationAmount"`
+	Timestamp         time.Time     `json:"timestamp"`
+	Details           *PriceDetails `json:"details,omitempty"`
 }
