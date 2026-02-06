@@ -73,10 +73,10 @@ func TestLayer2Formulas(t *testing.T) {
 	calc := &Layer2Calculator{}
 
 	deps := map[int]Indicator{
-		3:  {ID: 3, Value: decimal.NewFromInt(100000)},  // Assets Value
+		3:  {ID: 3, Value: decimal.NewFromInt(100000)},   // Assets Value
 		5:  {ID: 5, Value: decimal.NewFromInt(10000)},    // Total Shares
 		10: {ID: 10, Value: decimal.NewFromFloat(8.5)},   // Share Price
-		61: {ID: 61, Value: decimal.NewFromFloat(55000)},  // BTC Rate
+		61: {ID: 61, Value: decimal.NewFromFloat(55000)}, // BTC Rate
 	}
 
 	indicators, err := calc.Calculate(context.Background(), domain.FundStructureData{}, deps, nil)
@@ -130,20 +130,20 @@ func TestLayer2DivisionByZero(t *testing.T) {
 func testFundStructureData() domain.FundStructureData {
 	return domain.FundStructureData{
 		Accounts: []domain.FundAccountPortfolio{
-			{Name: "MAIN ISSUER", Type: domain.AccountTypeIssuer, TotalEURMTL: 50000, TotalXLM: 200000},
-			{Name: "DEFI", Type: domain.AccountTypeSubfond, TotalEURMTL: 30000, TotalXLM: 120000},
-			{Name: "MCITY", Type: domain.AccountTypeSubfond, TotalEURMTL: 10000, TotalXLM: 40000},
-			{Name: "MABIZ", Type: domain.AccountTypeSubfond, TotalEURMTL: 5000, TotalXLM: 20000},
-			{Name: "BOSS", Type: domain.AccountTypeSubfond, TotalEURMTL: 2000, TotalXLM: 8000},
-			{Name: "ADMIN", Type: domain.AccountTypeOperational, TotalEURMTL: 3000, TotalXLM: 12000},
+			{Name: "MAIN ISSUER", Type: domain.AccountTypeIssuer, TotalEURMTL: decimal.NewFromInt(50000), TotalXLM: decimal.NewFromInt(200000)},
+			{Name: "DEFI", Type: domain.AccountTypeSubfond, TotalEURMTL: decimal.NewFromInt(30000), TotalXLM: decimal.NewFromInt(120000)},
+			{Name: "MCITY", Type: domain.AccountTypeSubfond, TotalEURMTL: decimal.NewFromInt(10000), TotalXLM: decimal.NewFromInt(40000)},
+			{Name: "MABIZ", Type: domain.AccountTypeSubfond, TotalEURMTL: decimal.NewFromInt(5000), TotalXLM: decimal.NewFromInt(20000)},
+			{Name: "BOSS", Type: domain.AccountTypeSubfond, TotalEURMTL: decimal.NewFromInt(2000), TotalXLM: decimal.NewFromInt(8000)},
+			{Name: "ADMIN", Type: domain.AccountTypeOperational, TotalEURMTL: decimal.NewFromInt(3000), TotalXLM: decimal.NewFromInt(12000)},
 		},
 		MutualFunds: []domain.FundAccountPortfolio{
-			{Name: "APART", Type: domain.AccountTypeMutual, TotalEURMTL: 15000},
-			{Name: "MFB", Type: domain.AccountTypeMutual, TotalEURMTL: 8000},
+			{Name: "APART", Type: domain.AccountTypeMutual, TotalEURMTL: decimal.NewFromInt(15000)},
+			{Name: "MFB", Type: domain.AccountTypeMutual, TotalEURMTL: decimal.NewFromInt(8000)},
 		},
 		AggregatedTotals: domain.AggregatedTotals{
-			TotalEURMTL:  100000,
-			TotalXLM:     400000,
+			TotalEURMTL:  decimal.NewFromInt(100000),
+			TotalXLM:     decimal.NewFromInt(400000),
 			AccountCount: 6,
 			TokenCount:   45,
 		},

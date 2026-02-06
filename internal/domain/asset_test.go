@@ -8,8 +8,8 @@ func TestAssetInfoIsNative(t *testing.T) {
 		asset AssetInfo
 		want  bool
 	}{
-		{"XLM is native", XLMAsset, true},
-		{"EURMTL is not native", EURMTLAsset, false},
+		{"XLM is native", XLMAsset(), true},
+		{"EURMTL is not native", EURMTLAsset(), false},
 		{"credit_alphanum4 is not native", AssetInfo{Code: "MTL", Issuer: "GISSUER", Type: AssetTypeCreditAlphanum4}, false},
 	}
 
@@ -28,8 +28,8 @@ func TestAssetInfoCanonical(t *testing.T) {
 		asset AssetInfo
 		want  string
 	}{
-		{"XLM canonical", XLMAsset, "native"},
-		{"EURMTL canonical", EURMTLAsset, "EURMTL:GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"},
+		{"XLM canonical", XLMAsset(), "native"},
+		{"EURMTL canonical", EURMTLAsset(), "EURMTL:GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"},
 		{"credit_alphanum4", AssetInfo{Code: "MTL", Issuer: "GISSUER", Type: AssetTypeCreditAlphanum4}, "MTL:GISSUER"},
 	}
 
@@ -67,25 +67,27 @@ func TestAssetTypeFromCode(t *testing.T) {
 }
 
 func TestEURMTLAssetFields(t *testing.T) {
-	if EURMTLAsset.Code != "EURMTL" {
-		t.Errorf("EURMTLAsset.Code = %q, want EURMTL", EURMTLAsset.Code)
+	a := EURMTLAsset()
+	if a.Code != "EURMTL" {
+		t.Errorf("EURMTLAsset().Code = %q, want EURMTL", a.Code)
 	}
-	if EURMTLAsset.Issuer != "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V" {
-		t.Error("EURMTLAsset.Issuer mismatch")
+	if a.Issuer != IssuerAddress {
+		t.Error("EURMTLAsset().Issuer mismatch")
 	}
-	if EURMTLAsset.Type != AssetTypeCreditAlphanum12 {
-		t.Errorf("EURMTLAsset.Type = %q, want credit_alphanum12", EURMTLAsset.Type)
+	if a.Type != AssetTypeCreditAlphanum12 {
+		t.Errorf("EURMTLAsset().Type = %q, want credit_alphanum12", a.Type)
 	}
 }
 
 func TestXLMAssetFields(t *testing.T) {
-	if XLMAsset.Code != "XLM" {
-		t.Errorf("XLMAsset.Code = %q, want XLM", XLMAsset.Code)
+	a := XLMAsset()
+	if a.Code != "XLM" {
+		t.Errorf("XLMAsset().Code = %q, want XLM", a.Code)
 	}
-	if XLMAsset.Issuer != "" {
-		t.Errorf("XLMAsset.Issuer = %q, want empty", XLMAsset.Issuer)
+	if a.Issuer != "" {
+		t.Errorf("XLMAsset().Issuer = %q, want empty", a.Issuer)
 	}
-	if XLMAsset.Type != AssetTypeNative {
-		t.Errorf("XLMAsset.Type = %q, want native", XLMAsset.Type)
+	if a.Type != AssetTypeNative {
+		t.Errorf("XLMAsset().Type = %q, want native", a.Type)
 	}
 }

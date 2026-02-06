@@ -11,10 +11,10 @@ import (
 
 // Client is an HTTP client for the Stellar Horizon API with retry on 429.
 type Client struct {
-	baseURL       string
-	httpClient    *http.Client
-	maxRetries    int
-	baseDelay     time.Duration
+	baseURL    string
+	httpClient *http.Client
+	maxRetries int
+	baseDelay  time.Duration
 }
 
 // NewClient creates a new Horizon API client.

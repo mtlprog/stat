@@ -3,6 +3,8 @@ package price
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -94,8 +96,19 @@ func (s *Service) getSpotPrice(ctx context.Context, asset, baseAsset domain.Asse
 	}
 
 	// Both succeeded: choose the higher price (Section 3.4)
-	pathPrice, _ := decimal.NewFromString(pathResult.price.Price)
-	obPrice, _ := decimal.NewFromString(obResult.price.Price)
+	pathPrice, pathParseErr := decimal.NewFromString(pathResult.price.Price)
+	obPrice, obParseErr := decimal.NewFromString(obResult.price.Price)
+
+	// If one price is unparseable, prefer the other
+	if pathParseErr != nil && obParseErr != nil {
+		return domain.TokenPairPrice{}, fmt.Errorf("both price sources returned unparseable prices")
+	}
+	if pathParseErr != nil {
+		return obResult.price, nil
+	}
+	if obParseErr != nil {
+		return pathResult.price, nil
+	}
 
 	pathPriceStr := pathResult.price.Price
 	obPriceStr := obResult.price.Price
@@ -148,15 +161,13 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 	detailsEURMTL, detailsXLM domain.PriceDetails,
 	err error,
 ) {
-	// Get price in EURMTL
-	eurmtlResult, eurmtlErr := s.GetPrice(ctx, asset, domain.EURMTLAsset, "1")
+	eurmtlResult, eurmtlErr := s.GetPrice(ctx, asset, domain.EURMTLAsset(), "1")
 	if eurmtlErr == nil {
 		priceEURMTL = eurmtlResult.Price
 		detailsEURMTL = eurmtlResult.Details
 	}
 
-	// Get price in XLM
-	xlmResult, xlmErr := s.GetPrice(ctx, asset, domain.XLMAsset, "1")
+	xlmResult, xlmErr := s.GetPrice(ctx, asset, domain.XLMAsset(), "1")
 	if xlmErr == nil {
 		priceXLM = xlmResult.Price
 		detailsXLM = xlmResult.Details
@@ -164,24 +175,33 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 
 	// Cross-rate calculation (Section 3.5)
 	if (eurmtlErr == nil && xlmErr != nil) || (eurmtlErr != nil && xlmErr == nil) {
-		crossRate, crossErr := s.GetPrice(ctx, domain.EURMTLAsset, domain.XLMAsset, "1")
+		crossRate, crossErr := s.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
 		if crossErr == nil {
-			rate, _ := decimal.NewFromString(crossRate.Price)
-			if !rate.IsZero() {
+			rate, rateErr := decimal.NewFromString(crossRate.Price)
+			if rateErr != nil {
+				slog.Warn("cross-rate price unparseable", "price", crossRate.Price, "error", rateErr)
+			} else if !rate.IsZero() {
 				if eurmtlErr == nil && xlmErr != nil {
 					// Have EURMTL, derive XLM
-					eurmtlPrice, _ := decimal.NewFromString(priceEURMTL)
-					priceXLM = eurmtlPrice.Mul(rate).String()
+					eurmtlPrice, parseErr := decimal.NewFromString(priceEURMTL)
+					if parseErr != nil {
+						slog.Warn("cross-rate: EURMTL price unparseable", "asset", asset.Code, "price", priceEURMTL, "error", parseErr)
+					} else {
+						priceXLM = eurmtlPrice.Mul(rate).String()
+					}
 				} else {
 					// Have XLM, derive EURMTL
-					xlmPrice, _ := decimal.NewFromString(priceXLM)
-					priceEURMTL = xlmPrice.Div(rate).String()
+					xlmPrice, parseErr := decimal.NewFromString(priceXLM)
+					if parseErr != nil {
+						slog.Warn("cross-rate: XLM price unparseable", "asset", asset.Code, "price", priceXLM, "error", parseErr)
+					} else {
+						priceEURMTL = xlmPrice.Div(rate).String()
+					}
 				}
 			}
 		}
 	}
 
-	// Calculate values
 	if priceEURMTL != "" {
 		valueEURMTL = domain.MultiplyWithPrecision(priceEURMTL, balance)
 	}
@@ -190,20 +210,27 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 	}
 
 	// Get full-balance value if amount != 1
-	bal, _ := decimal.NewFromString(balance)
-	if !bal.IsZero() && !bal.Equal(decimal.NewFromInt(1)) {
+	bal, balErr := decimal.NewFromString(balance)
+	if balErr != nil {
+		slog.Warn("unparseable balance", "asset", asset.Code, "balance", balance, "error", balErr)
+	}
+	if balErr == nil && !bal.IsZero() && !bal.Equal(decimal.NewFromInt(1)) {
 		if priceEURMTL != "" {
-			fullResult, fullErr := s.GetPrice(ctx, asset, domain.EURMTLAsset, balance)
+			fullResult, fullErr := s.GetPrice(ctx, asset, domain.EURMTLAsset(), balance)
 			if fullErr == nil {
 				valueEURMTL = fullResult.DestinationAmount
 			}
 		}
 		if priceXLM != "" {
-			fullResult, fullErr := s.GetPrice(ctx, asset, domain.XLMAsset, balance)
+			fullResult, fullErr := s.GetPrice(ctx, asset, domain.XLMAsset(), balance)
 			if fullErr == nil {
 				valueXLM = fullResult.DestinationAmount
 			}
 		}
+	}
+
+	if eurmtlErr != nil && xlmErr != nil {
+		return "", "", "", "", nil, nil, fmt.Errorf("both EURMTL and XLM price lookups failed: eurmtl: %w, xlm: %v", eurmtlErr, xlmErr)
 	}
 
 	return priceEURMTL, priceXLM, valueEURMTL, valueXLM, detailsEURMTL, detailsXLM, nil

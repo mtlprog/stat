@@ -6,8 +6,8 @@ import "fmt"
 type AssetType string
 
 const (
-	AssetTypeNative          AssetType = "native"
-	AssetTypeCreditAlphanum4 AssetType = "credit_alphanum4"
+	AssetTypeNative           AssetType = "native"
+	AssetTypeCreditAlphanum4  AssetType = "credit_alphanum4"
 	AssetTypeCreditAlphanum12 AssetType = "credit_alphanum12"
 )
 
@@ -42,15 +42,24 @@ func AssetTypeFromCode(code string) AssetType {
 	return AssetTypeCreditAlphanum12
 }
 
-// EURMTLAsset is the fund's base stablecoin.
-var EURMTLAsset = AssetInfo{
-	Code:   "EURMTL",
-	Issuer: "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V",
-	Type:   AssetTypeCreditAlphanum12,
-}
+// IssuerAddress is the Stellar address of the main fund issuer.
+const IssuerAddress = "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"
 
-// XLMAsset is the Stellar native asset.
-var XLMAsset = AssetInfo{
-	Code: "XLM",
-	Type: AssetTypeNative,
-}
+// eurmtlAsset and xlmAsset are unexported to prevent external mutation.
+var (
+	eurmtlAsset = AssetInfo{
+		Code:   "EURMTL",
+		Issuer: IssuerAddress,
+		Type:   AssetTypeCreditAlphanum12,
+	}
+	xlmAsset = AssetInfo{
+		Code: "XLM",
+		Type: AssetTypeNative,
+	}
+)
+
+// EURMTLAsset returns the fund's base stablecoin asset info.
+func EURMTLAsset() AssetInfo { return eurmtlAsset }
+
+// XLMAsset returns the Stellar native asset info.
+func XLMAsset() AssetInfo { return xlmAsset }

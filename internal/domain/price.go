@@ -41,7 +41,7 @@ func (d *PathDetails) PriceSource() string { return "path" }
 
 // OrderbookDetails contains metadata from direct orderbook/AMM price discovery.
 type OrderbookDetails struct {
-	Source        string        `json:"source"` // always "orderbook"
+	Source        string        `json:"source"`    // always "orderbook"
 	PriceType     string        `json:"priceType"` // "bid" or "ask"
 	OrderbookData OrderbookData `json:"orderbookData"`
 }
@@ -50,7 +50,7 @@ func (d *OrderbookDetails) PriceSource() string { return "orderbook" }
 
 // BestDetails contains metadata when both path and orderbook sources are compared.
 type BestDetails struct {
-	Source           string            `json:"source"` // always "best"
+	Source           string            `json:"source"`    // always "best"
 	PriceType        string            `json:"priceType"` // "bid" or "ask"
 	PathPrice        *string           `json:"pathPrice"`
 	OrderbookPrice   *string           `json:"orderbookPrice"`

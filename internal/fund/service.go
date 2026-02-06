@@ -3,6 +3,7 @@ package fund
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/samber/lo"
@@ -44,7 +45,7 @@ type Service struct {
 	external  ExternalPriceService
 }
 
-// NewService creates a new FundStructureService.
+// NewService creates a new fund structure Service.
 func NewService(portfolio PortfolioService, price PriceService, val ValuationService, ext ExternalPriceService) *Service {
 	return &Service{
 		portfolio: portfolio,
@@ -56,15 +57,13 @@ func NewService(portfolio PortfolioService, price PriceService, val ValuationSer
 
 // GetFundStructure runs the full fund aggregation pipeline (Section 6).
 func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureData, error) {
-	// Step 1: Fetch all valuations
 	allValuations, err := s.valuation.FetchAllValuations(ctx)
 	if err != nil {
 		return domain.FundStructureData{}, fmt.Errorf("fetching valuations: %w", err)
 	}
 
-	// Step 2: Process each account
 	var allPortfolios []domain.FundAccountPortfolio
-	for _, acc := range domain.AccountRegistry {
+	for _, acc := range domain.AccountRegistry() {
 		portfolio, err := s.processAccount(ctx, acc, allValuations)
 		if err != nil {
 			return domain.FundStructureData{}, fmt.Errorf("processing account %s: %w", acc.Name, err)
@@ -79,7 +78,6 @@ func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureDat
 		}
 	}
 
-	// Step 3: Partition into three groups
 	mainAccounts, mutualAccounts, otherAccounts := partitionAccounts(allPortfolios)
 
 	return domain.FundStructureData{
@@ -91,21 +89,22 @@ func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureDat
 }
 
 func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, allValuations []domain.AssetValuation) (domain.FundAccountPortfolio, error) {
-	// Fetch balances
 	rawPortfolio, err := s.portfolio.FetchPortfolio(ctx, acc.Address)
 	if err != nil {
 		return domain.FundAccountPortfolio{}, err
 	}
 
-	// Merge valuations with owner priority
 	accountValuations := mergeValuations(acc.Address, allValuations)
 
-	// Get prices for all tokens
 	var tokens []domain.TokenPriceWithBalance
 	for _, tb := range rawPortfolio.Tokens {
 		token, err := s.priceToken(ctx, tb, acc.Address, accountValuations)
 		if err != nil {
-			// Log and continue — don't fail the whole account for one token
+			slog.Warn("failed to price token, using zero value",
+				"account", acc.Name,
+				"asset", tb.Asset.Code,
+				"error", err,
+			)
 			tokens = append(tokens, domain.TokenPriceWithBalance{
 				Asset:   tb.Asset,
 				Balance: tb.Balance,
@@ -122,11 +121,15 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 		}
 	}
 
-	// Get XLM price in EURMTL
 	var xlmPriceInEURMTL *string
-	xlmResult, err := s.price.GetPrice(ctx, domain.XLMAsset, domain.EURMTLAsset, "1")
+	xlmResult, err := s.price.GetPrice(ctx, domain.XLMAsset(), domain.EURMTLAsset(), "1")
 	if err == nil {
 		xlmPriceInEURMTL = &xlmResult.Price
+	} else {
+		slog.Warn("failed to get XLM price, EURMTL totals will exclude XLM holdings",
+			"account", acc.Name,
+			"error", err,
+		)
 	}
 
 	return domain.FundAccountPortfolio{
@@ -145,7 +148,6 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accountID string, accountValuations []domain.AssetValuation) (domain.TokenPriceWithBalance, error) {
 	isNFT := valuation.IsNFT(tb.Balance)
 
-	// Get market prices
 	priceEURMTL, priceXLM, valueEURMTL, valueXLM, detailsEURMTL, detailsXLM, err := s.price.GetTokenPrices(ctx, tb.Asset, tb.Balance)
 	if err != nil {
 		return domain.TokenPriceWithBalance{}, err
@@ -167,7 +169,14 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 	val := valuation.LookupValuation(tb.Asset.Code, tb.Balance, accountID, accountValuations)
 	if val != nil {
 		resolved, err := s.external.ResolveValuation(ctx, *val)
-		if err == nil {
+		if err != nil {
+			slog.Warn("manual valuation resolution failed, using market price",
+				"token", tb.Asset.Code,
+				"valuationType", val.ValuationType,
+				"sourceAccount", val.SourceAccount,
+				"error", err,
+			)
+		} else {
 			result.PriceInEURMTL = &resolved.ValueInEURMTL
 			if isNFT {
 				result.ValueInEURMTL = &resolved.ValueInEURMTL
@@ -178,8 +187,10 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 			result.NFTValuationAccount = val.SourceAccount
 
 			// Derive XLM value from EURMTL valuation
-			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.EURMTLAsset, domain.XLMAsset, "1")
-			if xlmErr == nil {
+			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
+			if xlmErr != nil {
+				slog.Debug("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)
+			} else {
 				xlmPrice := domain.DivideWithPrecision(resolved.ValueInEURMTL, xlmRate.Price)
 				result.PriceInXLM = &xlmPrice
 				if isNFT {

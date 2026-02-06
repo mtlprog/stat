@@ -2,6 +2,7 @@ package indicator
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/mtlprog/stat/internal/domain"
 )
@@ -12,8 +13,15 @@ type Service struct {
 	hist     *HistoricalData
 }
 
-// NewService creates a new IndicatorService with all calculators registered.
+// NewService creates a new indicator Service with all calculators registered.
+// Nil dependencies are allowed but will limit which indicators can be computed.
 func NewService(horizonPrice HorizonPriceSource, tokenomicsHorizon TokenomicsHorizon, hist *HistoricalData) *Service {
+	if horizonPrice == nil {
+		slog.Warn("indicator service: horizonPrice is nil, Layer 1 market prices will be zero")
+	}
+	if tokenomicsHorizon == nil {
+		slog.Warn("indicator service: tokenomicsHorizon is nil, tokenomics indicators will be zero")
+	}
 	registry := NewRegistry()
 
 	// Layer 0: per-account values
@@ -25,13 +33,13 @@ func NewService(horizonPrice HorizonPriceSource, tokenomicsHorizon TokenomicsHor
 	// Layer 2: ratios
 	registry.Register(&Layer2Calculator{})
 
-	// Layer 3: dividends
+	// Dividend indicators
 	registry.Register(&DividendCalculator{})
 
-	// Layer 4: analytics
+	// Analytics indicators
 	registry.Register(&AnalyticsCalculator{})
 
-	// Layer 5: tokenomics
+	// Tokenomics indicators
 	registry.Register(&TokenomicsCalculator{Horizon: tokenomicsHorizon})
 
 	return &Service{registry: registry, hist: hist}

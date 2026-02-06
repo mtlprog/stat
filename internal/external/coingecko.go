@@ -1,13 +1,17 @@
 package external
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // SymbolMapping maps internal symbols to CoinGecko IDs.
@@ -38,9 +42,13 @@ func NewCoinGeckoClient(baseURL string, delay time.Duration, maxRetries int) *Co
 	}
 }
 
+var (
+	satsDiv = decimal.NewFromInt(100_000_000)
+	auDiv   = decimal.RequireFromString("31.1035")
+)
+
 // FetchPrices fetches EUR prices for all configured symbols from CoinGecko.
-// Returns a map of symbol -> priceInEUR.
-func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]float64, error) {
+func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.Decimal, error) {
 	// Collect unique CoinGecko IDs
 	uniqueIDs := make(map[string]bool)
 	for _, id := range SymbolMapping {
@@ -59,27 +67,35 @@ func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]float64, 
 		return nil, err
 	}
 
-	// Parse: {"bitcoin":{"eur":45000},"ethereum":{"eur":2500},...}
-	var raw map[string]map[string]float64
-	if err := json.Unmarshal(body, &raw); err != nil {
+	// Use json.Decoder with UseNumber to avoid float64 precision loss
+	var raw map[string]map[string]json.Number
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing CoinGecko response: %w", err)
 	}
 
-	result := make(map[string]float64)
+	result := make(map[string]decimal.Decimal)
 	for symbol, coinID := range SymbolMapping {
 		prices, ok := raw[coinID]
 		if !ok {
+			slog.Warn("CoinGecko response missing symbol", "symbol", symbol, "coinID", coinID)
 			continue
 		}
-		eurPrice := prices["eur"]
+		eurStr := prices["eur"].String()
+		eurPrice, err := decimal.NewFromString(eurStr)
+		if err != nil {
+			slog.Warn("CoinGecko price unparseable", "symbol", symbol, "value", eurStr, "error", err)
+			continue
+		}
 
 		switch symbol {
 		case "Sats":
 			// 1 Sat = 1/100_000_000 BTC
-			result[symbol] = eurPrice / 100_000_000
+			result[symbol] = eurPrice.Div(satsDiv)
 		case "AU":
 			// Gold price is per troy ounce, convert to per gram
-			result[symbol] = eurPrice / 31.1035
+			result[symbol] = eurPrice.Div(auDiv)
 		default:
 			result[symbol] = eurPrice
 		}

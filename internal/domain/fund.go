@@ -1,5 +1,7 @@
 package domain
 
+import "github.com/shopspring/decimal"
+
 // FundAccountPortfolio represents a fully priced and valued account portfolio.
 type FundAccountPortfolio struct {
 	ID               string                  `json:"id"`
@@ -9,16 +11,16 @@ type FundAccountPortfolio struct {
 	Tokens           []TokenPriceWithBalance `json:"tokens"`
 	XLMBalance       string                  `json:"xlmBalance"`
 	XLMPriceInEURMTL *string                 `json:"xlmPriceInEURMTL"`
-	TotalEURMTL      float64                 `json:"totalEURMTL"`
-	TotalXLM         float64                 `json:"totalXLM"`
+	TotalEURMTL      decimal.Decimal         `json:"totalEURMTL"`
+	TotalXLM         decimal.Decimal         `json:"totalXLM"`
 }
 
 // AggregatedTotals holds the fund-level totals (excluding mutual and other accounts).
 type AggregatedTotals struct {
-	TotalEURMTL  float64 `json:"totalEURMTL"`
-	TotalXLM     float64 `json:"totalXLM"`
-	AccountCount int     `json:"accountCount"`
-	TokenCount   int     `json:"tokenCount"`
+	TotalEURMTL  decimal.Decimal `json:"totalEURMTL"`
+	TotalXLM     decimal.Decimal `json:"totalXLM"`
+	AccountCount int             `json:"accountCount"`
+	TokenCount   int             `json:"tokenCount"`
 }
 
 // FundStructureData is the top-level output of the fund aggregation pipeline.

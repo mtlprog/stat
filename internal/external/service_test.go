@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/mtlprog/stat/internal/domain"
 )
 
@@ -12,7 +14,7 @@ type mockQuoteRepo struct {
 	quotes map[string]Quote
 }
 
-func (m *mockQuoteRepo) SaveQuote(_ context.Context, symbol string, priceInEUR float64) error {
+func (m *mockQuoteRepo) SaveQuote(_ context.Context, symbol string, priceInEUR decimal.Decimal) error {
 	m.quotes[symbol] = Quote{Symbol: symbol, PriceInEUR: priceInEUR, UpdatedAt: time.Now()}
 	return nil
 }
@@ -54,7 +56,7 @@ func TestResolveValuationDirectEURMTL(t *testing.T) {
 
 func TestResolveValuationBTC(t *testing.T) {
 	repo := &mockQuoteRepo{quotes: map[string]Quote{
-		"BTC": {Symbol: "BTC", PriceInEUR: 55000, UpdatedAt: time.Now()},
+		"BTC": {Symbol: "BTC", PriceInEUR: decimal.RequireFromString("55000"), UpdatedAt: time.Now()},
 	}}
 	svc := NewService(nil, repo)
 
@@ -75,7 +77,7 @@ func TestResolveValuationBTC(t *testing.T) {
 
 func TestResolveValuationAUCompound(t *testing.T) {
 	repo := &mockQuoteRepo{quotes: map[string]Quote{
-		"AU": {Symbol: "AU", PriceInEUR: 57.88, UpdatedAt: time.Now()}, // price per gram
+		"AU": {Symbol: "AU", PriceInEUR: decimal.RequireFromString("57.88"), UpdatedAt: time.Now()}, // price per gram
 	}}
 	svc := NewService(nil, repo)
 

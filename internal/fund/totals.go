@@ -8,12 +8,14 @@ import (
 )
 
 // calculateAccountTotalEURMTL computes the total EURMTL value for an account.
-func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalance string, xlmPriceInEURMTL *string) float64 {
+// For NFTs (balance=0.0000001), uses the price directly as the total value.
+// For regular tokens, multiplies balance by unit price. Also adds XLM value if the EURMTL rate is available.
+func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalance string, xlmPriceInEURMTL *string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
 		if t.IsNFT {
-			return domain.SafeSum(acc, domain.SafeParse(ptrToString(t.PriceInEURMTL)))
+			return domain.SafeSum(acc, domain.SafeParse(domain.PtrToString(t.PriceInEURMTL)))
 		}
-		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, ptrToString(t.PriceInEURMTL)))
+		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, domain.PtrToString(t.PriceInEURMTL)))
 	}, decimal.Zero)
 
 	// Add XLM value
@@ -22,36 +24,34 @@ func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalan
 		total = domain.SafeSum(total, xlmValue)
 	}
 
-	f, _ := total.Float64()
-	return f
+	return total
 }
 
 // calculateAccountTotalXLM computes the total XLM value for an account.
-func calculateAccountTotalXLM(tokens []domain.TokenPriceWithBalance, xlmBalance string) float64 {
+func calculateAccountTotalXLM(tokens []domain.TokenPriceWithBalance, xlmBalance string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
 		if t.IsNFT {
-			return domain.SafeSum(acc, domain.SafeParse(ptrToString(t.PriceInXLM)))
+			return domain.SafeSum(acc, domain.SafeParse(domain.PtrToString(t.PriceInXLM)))
 		}
-		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, ptrToString(t.PriceInXLM)))
+		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, domain.PtrToString(t.PriceInXLM)))
 	}, decimal.Zero)
 
 	// Add XLM balance directly (it IS the native asset)
 	xlm := domain.SafeParse(xlmBalance)
 	total = domain.SafeSum(total, xlm)
 
-	f, _ := total.Float64()
-	return f
+	return total
 }
 
 // calculateFundTotals computes aggregate fund totals from main accounts only.
 func calculateFundTotals(accounts []domain.FundAccountPortfolio) domain.AggregatedTotals {
-	totalEURMTL := lo.Reduce(accounts, func(acc float64, a domain.FundAccountPortfolio, _ int) float64 {
-		return acc + a.TotalEURMTL
-	}, 0.0)
+	totalEURMTL := lo.Reduce(accounts, func(acc decimal.Decimal, a domain.FundAccountPortfolio, _ int) decimal.Decimal {
+		return acc.Add(a.TotalEURMTL)
+	}, decimal.Zero)
 
-	totalXLM := lo.Reduce(accounts, func(acc float64, a domain.FundAccountPortfolio, _ int) float64 {
-		return acc + a.TotalXLM
-	}, 0.0)
+	totalXLM := lo.Reduce(accounts, func(acc decimal.Decimal, a domain.FundAccountPortfolio, _ int) decimal.Decimal {
+		return acc.Add(a.TotalXLM)
+	}, decimal.Zero)
 
 	tokenCount := lo.Reduce(accounts, func(acc int, a domain.FundAccountPortfolio, _ int) int {
 		return acc + len(a.Tokens)
@@ -63,11 +63,4 @@ func calculateFundTotals(accounts []domain.FundAccountPortfolio) domain.Aggregat
 		AccountCount: len(accounts),
 		TokenCount:   tokenCount,
 	}
-}
-
-func ptrToString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

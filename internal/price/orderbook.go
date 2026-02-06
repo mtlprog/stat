@@ -2,6 +2,7 @@ package price
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -71,10 +72,15 @@ func (s *Service) fetchOrderbookData(ctx context.Context, source, dest domain.As
 		if len(ob.Bids) > 0 {
 			data.Orderbook.Bid = &ob.Bids[0].Price
 		}
+	} else {
+		slog.Warn("orderbook fetch failed", "source", source.Code, "dest", dest.Code, "error", err)
 	}
 
 	// Fetch AMM liquidity pool
 	pools, poolErr := s.horizon.FetchLiquidityPools(ctx, source, dest)
+	if poolErr != nil {
+		slog.Warn("liquidity pool fetch failed", "source", source.Code, "dest", dest.Code, "error", poolErr)
+	}
 	if poolErr == nil && len(pools) > 0 {
 		pool := pools[0]
 		spot := calculateAMMSpot(pool, source)
@@ -144,6 +150,7 @@ func parseDecimalOrZero(s *string) decimal.Decimal {
 	}
 	d, err := decimal.NewFromString(*s)
 	if err != nil {
+		slog.Warn("unparseable price in orderbook comparison", "value", *s, "error", err)
 		return decimal.Zero
 	}
 	return d

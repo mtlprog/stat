@@ -46,7 +46,7 @@ func TestGetPricePathOnly(t *testing.T) {
 	}
 
 	svc := NewService(mock)
-	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "100")
+	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "100")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestGetPriceSpotPathWins(t *testing.T) {
 	}
 
 	svc := NewService(mock)
-	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "1")
+	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestGetPriceSpotOrderbookWins(t *testing.T) {
 	}
 
 	svc := NewService(mock)
-	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "1")
+	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,14 +122,14 @@ func TestGetPriceCacheHit(t *testing.T) {
 	svc := NewService(mock)
 
 	// First call
-	_, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "100")
+	_, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "100")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	callCount++
 
 	// Second call should hit cache
-	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "100")
+	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "100")
 	if err != nil {
 		t.Fatalf("unexpected error on cached call: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestGetPriceZeroSourceAmount(t *testing.T) {
 	}
 
 	svc := NewService(mock)
-	_, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "100")
+	_, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "100")
 	if err == nil {
 		t.Error("expected error for zero source amount, got nil")
 	}
@@ -158,7 +158,7 @@ func TestGetPriceZeroSourceAmount(t *testing.T) {
 func TestGetPriceAMMSelection(t *testing.T) {
 	ask := "0.8"
 	mock := &mockHorizon{
-		strictSendErr: errors.New("no path"),
+		strictSendErr:    errors.New("no path"),
 		strictReceiveErr: errors.New("no path"),
 		orderbook: horizon.HorizonOrderbook{
 			Asks: []horizon.HorizonOrderbookEntry{{Price: ask, Amount: "100"}},
@@ -168,14 +168,14 @@ func TestGetPriceAMMSelection(t *testing.T) {
 				ID: "pool1",
 				Reserves: []horizon.HorizonLiquidityPoolReserve{
 					{Asset: "MTL:GISSUER", Amount: "1000"},
-					{Asset: domain.EURMTLAsset.Canonical(), Amount: "600"},
+					{Asset: domain.EURMTLAsset().Canonical(), Amount: "600"},
 				},
 			},
 		},
 	}
 
 	svc := NewService(mock)
-	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset, "1")
+	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
