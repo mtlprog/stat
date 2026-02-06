@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -9,12 +10,14 @@ import (
 const stellarPrecision = 7
 
 // SafeParse parses a string into a decimal, returning zero for invalid or empty input.
+// Logs a warning for non-empty malformed values to aid debugging.
 func SafeParse(value string) decimal.Decimal {
 	if value == "" {
 		return decimal.Zero
 	}
 	d, err := decimal.NewFromString(value)
 	if err != nil {
+		slog.Warn("SafeParse: malformed decimal value, using zero", "value", value, "error", err)
 		return decimal.Zero
 	}
 	return d
@@ -51,6 +54,14 @@ func DivideWithPrecision(a, b string) string {
 	}
 	result := da.Div(db)
 	return formatStellar(result)
+}
+
+// PtrToString dereferences a string pointer, returning empty string if nil.
+func PtrToString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // formatStellar rounds to 7 decimal places and strips trailing zeros.

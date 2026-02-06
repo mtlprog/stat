@@ -133,6 +133,54 @@ func TestGetSnapshotByDateInvalid(t *testing.T) {
 	}
 }
 
+func TestListSnapshotsLimitCappedAt365(t *testing.T) {
+	data, _ := json.Marshal(map[string]string{})
+	repo := &mockSnapshotRepo{
+		snapshots: []snapshot.Snapshot{
+			{ID: 1, Data: data},
+		},
+	}
+	svc := snapshot.NewService(&mockFundService{}, repo)
+	handler := NewHandler(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/snapshots?limit=9999", nil)
+	w := httptest.NewRecorder()
+	handler.ListSnapshots(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	// The handler should cap at 365, not pass 9999 through
+	// We can only verify it didn't crash; the real limit is in the handler logic
+}
+
+func TestListSnapshotsNegativeLimit(t *testing.T) {
+	data, _ := json.Marshal(map[string]string{})
+	repo := &mockSnapshotRepo{
+		snapshots: []snapshot.Snapshot{
+			{ID: 1, Data: data},
+			{ID: 2, Data: data},
+		},
+	}
+	svc := snapshot.NewService(&mockFundService{}, repo)
+	handler := NewHandler(svc)
+
+	// Negative limit should fall back to default 30
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/snapshots?limit=-5", nil)
+	w := httptest.NewRecorder()
+	handler.ListSnapshots(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+
+	var result []snapshot.Snapshot
+	json.NewDecoder(w.Body).Decode(&result)
+	if len(result) != 2 {
+		t.Errorf("snapshot count = %d, want 2 (default limit should apply)", len(result))
+	}
+}
+
 func TestListSnapshots(t *testing.T) {
 	data, _ := json.Marshal(map[string]string{})
 	repo := &mockSnapshotRepo{

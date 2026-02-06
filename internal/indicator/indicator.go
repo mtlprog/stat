@@ -12,12 +12,75 @@ import (
 	"github.com/mtlprog/stat/internal/snapshot"
 )
 
+// IndicatorMeta holds the canonical name and unit for an indicator.
+type IndicatorMeta struct {
+	Name string
+	Unit string
+}
+
+// indicatorRegistry maps indicator IDs to their canonical metadata.
+// All calculators MUST use NewIndicator() to construct indicators from this registry.
+var indicatorRegistry = map[int]IndicatorMeta{
+	1:  {Name: "Market Cap EUR", Unit: "EURMTL"},
+	2:  {Name: "Market Cap BTC", Unit: "BTC"},
+	3:  {Name: "Assets Value MTLF", Unit: "EURMTL"},
+	4:  {Name: "Operating Balance", Unit: "EURMTL"},
+	5:  {Name: "Total Shares", Unit: "shares"},
+	6:  {Name: "MTL in Circulation", Unit: "MTL"},
+	7:  {Name: "MTLRECT in Circulation", Unit: "MTLRECT"},
+	8:  {Name: "Share Book Value", Unit: "EURMTL"},
+	10: {Name: "Share Market Price", Unit: "EURMTL"},
+	11: {Name: "Monthly Dividends", Unit: "EURMTL"},
+	15: {Name: "Dividends Per Share", Unit: "EURMTL"},
+	16: {Name: "Annual Dividend Yield 1", Unit: "%"},
+	17: {Name: "Annual Dividend Yield 2", Unit: "%"},
+	18: {Name: "Shareholders by EURMTL", Unit: "accounts"},
+	21: {Name: "Average Shareholding", Unit: "shares"},
+	22: {Name: "Average Share Price", Unit: "EURMTL"},
+	23: {Name: "Median Shareholding", Unit: "shares"},
+	24: {Name: "EURMTL Participants", Unit: "accounts"},
+	25: {Name: "EURMTL Daily Volume", Unit: "EURMTL"},
+	26: {Name: "EURMTL 30d Volume", Unit: "EURMTL"},
+	27: {Name: "MTL Shareholders (>=1)", Unit: "accounts"},
+	30: {Name: "Price/Book Ratio", Unit: "ratio"},
+	33: {Name: "Earnings Per Share", Unit: "EURMTL"},
+	34: {Name: "Price/Earnings Ratio", Unit: "ratio"},
+	40: {Name: "Association Participants", Unit: "accounts"},
+	43: {Name: "Total ROI", Unit: "%"},
+	44: {Name: "Beta", Unit: "ratio"},
+	45: {Name: "Sharpe Ratio", Unit: "ratio"},
+	46: {Name: "Sortino Ratio", Unit: "ratio"},
+	47: {Name: "Value at Risk", Unit: "%"},
+	48: {Name: "Earnings/Book Value", Unit: "ratio"},
+	49: {Name: "MTLRECT Market Price", Unit: "EURMTL"},
+	51: {Name: "DEFI Total Value", Unit: "EURMTL"},
+	52: {Name: "MCITY Total Value", Unit: "EURMTL"},
+	53: {Name: "MABIZ Total Value", Unit: "EURMTL"},
+	54: {Name: "Annual DPS", Unit: "EURMTL"},
+	55: {Name: "Price Year Ago", Unit: "EURMTL"},
+	56: {Name: "MFApart Total Value", Unit: "EURMTL"},
+	57: {Name: "MFBond Total Value", Unit: "EURMTL"},
+	58: {Name: "Issuer Free Assets", Unit: "EURMTL"},
+	59: {Name: "BOSS Total Value", Unit: "EURMTL"},
+	60: {Name: "ADMIN Total Value", Unit: "EURMTL"},
+	61: {Name: "BTC Rate", Unit: "EUR"},
+}
+
 // Indicator represents a calculated statistical indicator.
 type Indicator struct {
 	ID    int             `json:"id"`
 	Name  string          `json:"name"`
 	Value decimal.Decimal `json:"value"`
 	Unit  string          `json:"unit"`
+}
+
+// NewIndicator creates an indicator using the canonical metadata from the registry.
+// Falls back to the provided name and unit if the ID is not registered.
+func NewIndicator(id int, value decimal.Decimal, name, unit string) Indicator {
+	if meta, ok := indicatorRegistry[id]; ok {
+		return Indicator{ID: id, Name: meta.Name, Value: value, Unit: meta.Unit}
+	}
+	return Indicator{ID: id, Name: name, Value: value, Unit: unit}
 }
 
 // Calculator computes one or more indicators given a snapshot and previously computed indicators.
@@ -36,16 +99,24 @@ type HistoricalData struct {
 
 // Registry manages the execution of calculators in dependency order.
 type Registry struct {
-	calculators []Calculator
+	calculators   []Calculator
+	registeredIDs map[int]bool
 }
 
 // NewRegistry creates a new indicator registry.
 func NewRegistry() *Registry {
-	return &Registry{}
+	return &Registry{registeredIDs: make(map[int]bool)}
 }
 
 // Register adds a calculator to the registry.
+// Panics if any indicator ID is already registered (programming error).
 func (r *Registry) Register(calc Calculator) {
+	for _, id := range calc.IDs() {
+		if r.registeredIDs[id] {
+			panic(fmt.Sprintf("duplicate indicator ID %d registered", id))
+		}
+		r.registeredIDs[id] = true
+	}
 	r.calculators = append(r.calculators, calc)
 }
 

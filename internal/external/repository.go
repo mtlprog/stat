@@ -6,18 +6,19 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 )
 
 // Quote represents an external price quote stored in the database.
 type Quote struct {
-	Symbol     string    `json:"symbol"`
-	PriceInEUR float64   `json:"priceInEur"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	Symbol     string          `json:"symbol"`
+	PriceInEUR decimal.Decimal `json:"priceInEur"`
+	UpdatedAt  time.Time       `json:"updatedAt"`
 }
 
 // QuoteRepository defines persistent storage for external quotes.
 type QuoteRepository interface {
-	SaveQuote(ctx context.Context, symbol string, priceInEUR float64) error
+	SaveQuote(ctx context.Context, symbol string, priceInEUR decimal.Decimal) error
 	GetQuote(ctx context.Context, symbol string) (Quote, error)
 	GetAllQuotes(ctx context.Context) ([]Quote, error)
 }
@@ -32,7 +33,7 @@ func NewPgQuoteRepository(pool *pgxpool.Pool) *PgQuoteRepository {
 	return &PgQuoteRepository{pool: pool}
 }
 
-func (r *PgQuoteRepository) SaveQuote(ctx context.Context, symbol string, priceInEUR float64) error {
+func (r *PgQuoteRepository) SaveQuote(ctx context.Context, symbol string, priceInEUR decimal.Decimal) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO external_quotes (symbol, price_in_eur, updated_at)
 		 VALUES ($1, $2, NOW())

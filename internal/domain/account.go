@@ -23,10 +23,11 @@ type FundAccount struct {
 	Description string      `json:"description"`
 }
 
-// AccountRegistry holds all 11 fund accounts per Section 2.2.
-var AccountRegistry = []FundAccount{
-	// 8 main accounts
-	{Name: "MAIN ISSUER", Type: AccountTypeIssuer, Address: "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V", Description: "Main token issuer account"},
+// accountRegistry holds all 11 fund accounts.
+// Unexported to prevent external mutation.
+var accountRegistry = []FundAccount{
+	// 6 main accounts (issuer + subfond + operational)
+	{Name: "MAIN ISSUER", Type: AccountTypeIssuer, Address: IssuerAddress, Description: "Main token issuer account"},
 	{Name: "MABIZ", Type: AccountTypeSubfond, Address: "GAQ5ERJVI6IW5UVNPEVXUUVMXH3GCDHJ4BJAXMAAKPR5VBWWAUOMABIZ", Description: "Sub-fund for business investments"},
 	{Name: "MCITY", Type: AccountTypeSubfond, Address: "GCOJHUKGHI6IATN7AIEK4PSNBPXIAIZ7KB2AWTTUCNIAYVPUB2DMCITY", Description: "Sub-fund for city development"},
 	{Name: "DEFI", Type: AccountTypeSubfond, Address: "GAEZHXMFRW2MWLWCXSBNZNUSE6SN3ODZDDOMPFH3JPMJXN4DKBPMDEFI", Description: "Sub-fund for DeFi operations"},
@@ -40,29 +41,36 @@ var AccountRegistry = []FundAccount{
 	{Name: "PROGRAMMERS GUILD", Type: AccountTypeOther, Address: "GDRLJC6EOKRR3BPKWGJPGI5GUN4GZFZRWQFDG3RJNZJEIBYA7B3EPROG", Description: "Programmers guild account"},
 }
 
+// AccountRegistry returns a copy of the fund account registry.
+func AccountRegistry() []FundAccount {
+	result := make([]FundAccount, len(accountRegistry))
+	copy(result, accountRegistry)
+	return result
+}
+
 // MainAccounts returns accounts of type issuer, subfond, or operational.
 func MainAccounts() []FundAccount {
-	return lo.Filter(AccountRegistry, func(a FundAccount, _ int) bool {
+	return lo.Filter(accountRegistry, func(a FundAccount, _ int) bool {
 		return a.Type == AccountTypeIssuer || a.Type == AccountTypeSubfond || a.Type == AccountTypeOperational
 	})
 }
 
 // MutualAccounts returns accounts of type mutual.
 func MutualAccounts() []FundAccount {
-	return lo.Filter(AccountRegistry, func(a FundAccount, _ int) bool {
+	return lo.Filter(accountRegistry, func(a FundAccount, _ int) bool {
 		return a.Type == AccountTypeMutual
 	})
 }
 
 // OtherAccounts returns accounts of type other.
 func OtherAccounts() []FundAccount {
-	return lo.Filter(AccountRegistry, func(a FundAccount, _ int) bool {
+	return lo.Filter(accountRegistry, func(a FundAccount, _ int) bool {
 		return a.Type == AccountTypeOther
 	})
 }
 
 // AggregatedAccounts returns accounts included in fund totals (issuer + subfond + operational).
-// Same as MainAccounts — mutual and other are excluded from aggregation per Section 6.3.
+// Same as MainAccounts — mutual and other are excluded from aggregation.
 func AggregatedAccounts() []FundAccount {
 	return MainAccounts()
 }
@@ -70,7 +78,7 @@ func AggregatedAccounts() []FundAccount {
 // AccountByAddress looks up a fund account by its Stellar address.
 // Returns the account and true if found, zero value and false otherwise.
 func AccountByAddress(address string) (FundAccount, bool) {
-	return lo.Find(AccountRegistry, func(a FundAccount) bool {
+	return lo.Find(accountRegistry, func(a FundAccount) bool {
 		return a.Address == address
 	})
 }

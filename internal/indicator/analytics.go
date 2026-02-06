@@ -39,7 +39,7 @@ func (c *AnalyticsCalculator) Calculate(_ context.Context, _ domain.FundStructur
 	// I47: VaR (requires historical time series — placeholder)
 	i47 := decimal.Zero
 
-	// I48: E/BV = net profit / AV (Assets Value per share)
+	// I48: E/BV = Annual DPS / Book Value per Share = I54 / (I3 / I5)
 	i48 := decimal.Zero
 	if !i5.IsZero() && !i3.IsZero() {
 		avPerShare := i3.Div(i5)
@@ -49,11 +49,11 @@ func (c *AnalyticsCalculator) Calculate(_ context.Context, _ domain.FundStructur
 	}
 
 	return []Indicator{
-		{ID: 43, Name: "Total ROI", Value: i43, Unit: "%"},
-		{ID: 44, Name: "Beta", Value: i44, Unit: "ratio"},
-		{ID: 45, Name: "Sharpe Ratio", Value: i45, Unit: "ratio"},
-		{ID: 46, Name: "Sortino Ratio", Value: i46, Unit: "ratio"},
-		{ID: 47, Name: "Value at Risk", Value: i47, Unit: "%"},
-		{ID: 48, Name: "Earnings/Book Value", Value: i48, Unit: "ratio"},
+		NewIndicator(43, i43, "", ""),
+		NewIndicator(44, i44, "", ""),
+		NewIndicator(45, i45, "", ""),
+		NewIndicator(46, i46, "", ""),
+		NewIndicator(47, i47, "", ""),
+		NewIndicator(48, i48, "", ""),
 	}, nil
 }

@@ -26,7 +26,7 @@ func newPriceCache() *priceCache {
 	}
 }
 
-// cacheKey formats: "{tokenACode}:{tokenAIssuer}=>{tokenBCode}:{tokenBIssuer}:{amount}"
+// cacheKey formats: "{source.Canonical()}=>{dest.Canonical()}:{amount}" e.g. "EURMTL:GACK...=>native:1"
 func cacheKey(source, dest domain.AssetInfo, amount string) string {
 	return fmt.Sprintf("%s=>%s:%s", source.Canonical(), dest.Canonical(), amount)
 }

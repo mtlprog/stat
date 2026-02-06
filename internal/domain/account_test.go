@@ -5,8 +5,8 @@ import (
 )
 
 func TestAccountRegistryCount(t *testing.T) {
-	if got := len(AccountRegistry); got != 11 {
-		t.Errorf("AccountRegistry has %d accounts, want 11", got)
+	if got := len(AccountRegistry()); got != 11 {
+		t.Errorf("AccountRegistry() has %d accounts, want 11", got)
 	}
 }
 
@@ -91,21 +91,37 @@ func TestAccountRegistryContainsAllExpected(t *testing.T) {
 
 	for _, name := range expectedNames {
 		found := false
-		for _, a := range AccountRegistry {
+		for _, a := range AccountRegistry() {
 			if a.Name == name {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("AccountRegistry missing account %q", name)
+			t.Errorf("AccountRegistry() missing account %q", name)
 		}
+	}
+}
+
+func TestAccountRegistryImmutability(t *testing.T) {
+	reg1 := AccountRegistry()
+	// Mutate the returned slice
+	reg1[0].Name = "HACKED"
+	reg1[0].Address = "GHACKED"
+
+	// The original should be unaffected
+	reg2 := AccountRegistry()
+	if reg2[0].Name == "HACKED" {
+		t.Error("AccountRegistry() returned a mutable reference to the global — mutation leaked")
+	}
+	if reg2[0].Address == "GHACKED" {
+		t.Error("AccountRegistry() address mutation leaked to global state")
 	}
 }
 
 func TestAccountTypeCounts(t *testing.T) {
 	counts := map[AccountType]int{}
-	for _, a := range AccountRegistry {
+	for _, a := range AccountRegistry() {
 		counts[a.Type]++
 	}
 

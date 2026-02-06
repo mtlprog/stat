@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/mtlprog/stat/internal/domain"
@@ -41,11 +42,15 @@ func ScanAccountValuations(ctx context.Context, fetcher AccountFetcher, accountI
 
 		decoded, err := base64.StdEncoding.DecodeString(encodedValue)
 		if err != nil {
+			slog.Warn("failed to decode DATA entry value",
+				"account", accountID, "key", key, "error", err)
 			continue
 		}
 
 		parsed, err := ParseDataEntryValue(string(decoded))
 		if err != nil {
+			slog.Info("skipping unparseable cost DATA entry",
+				"account", accountID, "key", key, "value", string(decoded), "error", err)
 			continue
 		}
 

@@ -8,10 +8,10 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
-// DividendCalculator computes dividend-related indicators (I11, I15, I33, I34, I54, I55, I16, I17).
+// DividendCalculator computes dividend-related indicators (I11, I15, I16, I17, I33, I34, I54, I55).
 type DividendCalculator struct{}
 
-func (c *DividendCalculator) IDs() []int { return []int{11, 15, 33, 34, 54, 55, 16, 17} }
+func (c *DividendCalculator) IDs() []int          { return []int{11, 15, 33, 34, 54, 55, 16, 17} }
 func (c *DividendCalculator) Dependencies() []int { return []int{5, 10} }
 
 func (c *DividendCalculator) Calculate(_ context.Context, _ domain.FundStructureData, deps map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
@@ -52,13 +52,13 @@ func (c *DividendCalculator) Calculate(_ context.Context, _ domain.FundStructure
 	}
 
 	return []Indicator{
-		{ID: 11, Name: "Monthly Dividends", Value: i11, Unit: "EURMTL"},
-		{ID: 15, Name: "Dividends Per Share", Value: i15, Unit: "EURMTL"},
-		{ID: 16, Name: "Annual Dividend Yield 1", Value: i16, Unit: "%"},
-		{ID: 17, Name: "Annual Dividend Yield 2", Value: i17, Unit: "%"},
-		{ID: 33, Name: "Earnings Per Share", Value: i33, Unit: "EURMTL"},
-		{ID: 34, Name: "Price/Earnings Ratio", Value: i34, Unit: "ratio"},
-		{ID: 54, Name: "Annual DPS", Value: i54, Unit: "EURMTL"},
-		{ID: 55, Name: "Price Year Ago", Value: i55, Unit: "EURMTL"},
+		NewIndicator(11, i11, "", ""),
+		NewIndicator(15, i15, "", ""),
+		NewIndicator(16, i16, "", ""),
+		NewIndicator(17, i17, "", ""),
+		NewIndicator(33, i33, "", ""),
+		NewIndicator(34, i34, "", ""),
+		NewIndicator(54, i54, "", ""),
+		NewIndicator(55, i55, "", ""),
 	}, nil
 }

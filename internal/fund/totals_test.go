@@ -3,6 +3,8 @@ package fund
 import (
 	"testing"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/mtlprog/stat/internal/domain"
 )
 
@@ -19,8 +21,8 @@ func TestCalculateAccountTotalEURMTLNormal(t *testing.T) {
 	total := calculateAccountTotalEURMTL(tokens, "1000", &xlmPrice)
 
 	// 10*2 + 100 (NFT) + 1000*0.5 = 20 + 100 + 500 = 620
-	if total != 620 {
-		t.Errorf("totalEURMTL = %v, want 620", total)
+	if !total.Equal(decimal.NewFromInt(620)) {
+		t.Errorf("totalEURMTL = %s, want 620", total)
 	}
 }
 
@@ -34,8 +36,8 @@ func TestCalculateAccountTotalXLMNormal(t *testing.T) {
 	total := calculateAccountTotalXLM(tokens, "500")
 
 	// 10*5 + 500 = 550
-	if total != 550 {
-		t.Errorf("totalXLM = %v, want 550", total)
+	if !total.Equal(decimal.NewFromInt(550)) {
+		t.Errorf("totalXLM = %s, want 550", total)
 	}
 }
 
@@ -45,24 +47,24 @@ func TestCalculateAccountTotalNilPrices(t *testing.T) {
 	}
 
 	total := calculateAccountTotalEURMTL(tokens, "0", nil)
-	if total != 0 {
-		t.Errorf("totalEURMTL with nil prices = %v, want 0", total)
+	if !total.Equal(decimal.Zero) {
+		t.Errorf("totalEURMTL with nil prices = %s, want 0", total)
 	}
 }
 
 func TestCalculateFundTotals(t *testing.T) {
 	accounts := []domain.FundAccountPortfolio{
-		{TotalEURMTL: 1000, TotalXLM: 5000, Tokens: make([]domain.TokenPriceWithBalance, 3)},
-		{TotalEURMTL: 2000, TotalXLM: 10000, Tokens: make([]domain.TokenPriceWithBalance, 5)},
+		{TotalEURMTL: decimal.NewFromInt(1000), TotalXLM: decimal.NewFromInt(5000), Tokens: make([]domain.TokenPriceWithBalance, 3)},
+		{TotalEURMTL: decimal.NewFromInt(2000), TotalXLM: decimal.NewFromInt(10000), Tokens: make([]domain.TokenPriceWithBalance, 5)},
 	}
 
 	totals := calculateFundTotals(accounts)
 
-	if totals.TotalEURMTL != 3000 {
-		t.Errorf("TotalEURMTL = %v, want 3000", totals.TotalEURMTL)
+	if !totals.TotalEURMTL.Equal(decimal.NewFromInt(3000)) {
+		t.Errorf("TotalEURMTL = %s, want 3000", totals.TotalEURMTL)
 	}
-	if totals.TotalXLM != 15000 {
-		t.Errorf("TotalXLM = %v, want 15000", totals.TotalXLM)
+	if !totals.TotalXLM.Equal(decimal.NewFromInt(15000)) {
+		t.Errorf("TotalXLM = %s, want 15000", totals.TotalXLM)
 	}
 	if totals.AccountCount != 2 {
 		t.Errorf("AccountCount = %d, want 2", totals.AccountCount)

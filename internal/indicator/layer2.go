@@ -11,8 +11,8 @@ import (
 // Layer2Calculator computes ratio indicators (I1, I2, I8, I30).
 type Layer2Calculator struct{}
 
-func (c *Layer2Calculator) IDs() []int           { return []int{1, 2, 8, 30} }
-func (c *Layer2Calculator) Dependencies() []int  { return []int{3, 5, 10, 61} }
+func (c *Layer2Calculator) IDs() []int          { return []int{1, 2, 8, 30} }
+func (c *Layer2Calculator) Dependencies() []int { return []int{3, 5, 10, 61} }
 
 func (c *Layer2Calculator) Calculate(_ context.Context, _ domain.FundStructureData, deps map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
 	i5 := deps[5].Value   // Total Shares
@@ -42,9 +42,9 @@ func (c *Layer2Calculator) Calculate(_ context.Context, _ domain.FundStructureDa
 	}
 
 	return []Indicator{
-		{ID: 1, Name: "Market Cap EUR", Value: i1, Unit: "EURMTL"},
-		{ID: 2, Name: "Market Cap BTC", Value: i2, Unit: "BTC"},
-		{ID: 8, Name: "Share Book Value", Value: i8, Unit: "EURMTL"},
-		{ID: 30, Name: "Price/Book Ratio", Value: i30, Unit: "ratio"},
+		NewIndicator(1, i1, "", ""),
+		NewIndicator(2, i2, "", ""),
+		NewIndicator(8, i8, "", ""),
+		NewIndicator(30, i30, "", ""),
 	}, nil
 }

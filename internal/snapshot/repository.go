@@ -13,7 +13,7 @@ import (
 type Snapshot struct {
 	ID           int             `json:"id"`
 	EntityID     int             `json:"entityId"`
-	SnapshotDate time.Time      `json:"snapshotDate"`
+	SnapshotDate time.Time       `json:"snapshotDate"`
 	Data         json.RawMessage `json:"data"`
 	CreatedAt    time.Time       `json:"createdAt"`
 }

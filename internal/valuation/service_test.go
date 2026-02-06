@@ -66,6 +66,29 @@ func TestLookupValuationFallback(t *testing.T) {
 	}
 }
 
+func TestDeduplicateValuationsDeterministic(t *testing.T) {
+	// Same valuations in different input orders should produce same result
+	v1 := domain.AssetValuation{TokenCode: "TOKEN", ValuationType: domain.ValuationTypeUnit, SourceAccount: "GAAA", RawValue: domain.ValuationValue{Type: domain.ValuationValueEURMTL, Value: "100"}}
+	v2 := domain.AssetValuation{TokenCode: "TOKEN", ValuationType: domain.ValuationTypeUnit, SourceAccount: "GZZZ", RawValue: domain.ValuationValue{Type: domain.ValuationValueEURMTL, Value: "200"}}
+
+	// Order 1: GZZZ first
+	result1 := deduplicateValuations([]domain.AssetValuation{v2, v1})
+	// Order 2: GAAA first
+	result2 := deduplicateValuations([]domain.AssetValuation{v1, v2})
+
+	if len(result1) != 1 || len(result2) != 1 {
+		t.Fatalf("expected 1 deduped valuation each, got %d and %d", len(result1), len(result2))
+	}
+
+	// Both should select the same account (lexicographically first: GAAA)
+	if result1[0].SourceAccount != result2[0].SourceAccount {
+		t.Errorf("non-deterministic dedup: order1=%q, order2=%q", result1[0].SourceAccount, result2[0].SourceAccount)
+	}
+	if result1[0].SourceAccount != "GAAA" {
+		t.Errorf("dedup should pick lexicographically first account, got %q", result1[0].SourceAccount)
+	}
+}
+
 func TestLookupValuationNotFound(t *testing.T) {
 	valuations := []domain.AssetValuation{
 		{TokenCode: "OTHER", ValuationType: domain.ValuationTypeUnit, SourceAccount: "GOTHER"},

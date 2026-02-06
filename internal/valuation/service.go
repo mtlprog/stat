@@ -3,6 +3,7 @@ package valuation
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/samber/lo"
@@ -20,10 +21,10 @@ func NewService(fetcher AccountFetcher) *Service {
 	return &Service{fetcher: fetcher}
 }
 
-// FetchAllValuations scans all 11 fund accounts for DATA entry valuations with concurrency=3.
+// FetchAllValuations scans all fund accounts for DATA entry valuations with concurrency=3.
 // Deduplicates by tokenCode:valuationType with owner priority.
 func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuation, error) {
-	accounts := domain.AccountRegistry
+	accounts := domain.AccountRegistry()
 	var mu sync.Mutex
 	var allValuations []domain.AssetValuation
 	var firstErr error
@@ -60,8 +61,12 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 	return deduplicateValuations(allValuations), nil
 }
 
-// deduplicateValuations removes duplicates by tokenCode:valuationType, keeping the first occurrence.
+// deduplicateValuations removes duplicates by tokenCode:valuationType.
+// Sorts by source account first to ensure deterministic results regardless of goroutine ordering.
 func deduplicateValuations(valuations []domain.AssetValuation) []domain.AssetValuation {
+	sort.Slice(valuations, func(i, j int) bool {
+		return valuations[i].SourceAccount < valuations[j].SourceAccount
+	})
 	return lo.UniqBy(valuations, func(v domain.AssetValuation) string {
 		return fmt.Sprintf("%s:%s", v.TokenCode, v.ValuationType)
 	})
@@ -74,8 +79,8 @@ func LookupValuation(tokenCode, balance, ownerAccount string, valuations []domai
 
 	var preferred, fallback domain.ValuationType
 	if isNFT {
-		preferred = domain.ValuationTypeNFT  // _COST
-		fallback = domain.ValuationTypeUnit  // _1COST
+		preferred = domain.ValuationTypeNFT // _COST
+		fallback = domain.ValuationTypeUnit // _1COST
 	} else {
 		preferred = domain.ValuationTypeUnit // _1COST
 		fallback = domain.ValuationTypeNFT   // _COST

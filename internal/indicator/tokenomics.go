@@ -28,7 +28,7 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	// I24: EURMTL holder count
 	i24 := decimal.Zero
 	if c.Horizon != nil {
-		count, err := c.Horizon.FetchAssetHolders(ctx, domain.EURMTLAsset)
+		count, err := c.Horizon.FetchAssetHolders(ctx, domain.EURMTLAsset())
 		if err == nil {
 			i24 = decimal.NewFromInt(int64(count))
 		}
@@ -64,7 +64,7 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	// I40: MTLAP holder count
 	i40 := decimal.Zero
 	if c.Horizon != nil {
-		mtlapAsset := domain.AssetInfo{Code: "MTLAP", Issuer: domain.EURMTLAsset.Issuer, Type: domain.AssetTypeCreditAlphanum4}
+		mtlapAsset := domain.AssetInfo{Code: "MTLAP", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum4}
 		count, err := c.Horizon.FetchAssetHolders(ctx, mtlapAsset)
 		if err == nil {
 			i40 = decimal.NewFromInt(int64(count))
@@ -72,14 +72,14 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	}
 
 	return []Indicator{
-		{ID: 18, Name: "Shareholders by EURMTL", Value: i18, Unit: "accounts"},
-		{ID: 21, Name: "Average Shareholding", Value: i21, Unit: "shares"},
-		{ID: 22, Name: "Average Share Price", Value: i22, Unit: "EURMTL"},
-		{ID: 23, Name: "Median Shareholding", Value: i23, Unit: "shares"},
-		{ID: 24, Name: "EURMTL Participants", Value: i24, Unit: "accounts"},
-		{ID: 25, Name: "EURMTL Daily Volume", Value: i25, Unit: "EURMTL"},
-		{ID: 26, Name: "EURMTL 30d Volume", Value: i26, Unit: "EURMTL"},
-		{ID: 27, Name: "MTL Shareholders (>=1)", Value: i27, Unit: "accounts"},
-		{ID: 40, Name: "Association Participants", Value: i40, Unit: "accounts"},
+		NewIndicator(18, i18, "", ""),
+		NewIndicator(21, i21, "", ""),
+		NewIndicator(22, i22, "", ""),
+		NewIndicator(23, i23, "", ""),
+		NewIndicator(24, i24, "", ""),
+		NewIndicator(25, i25, "", ""),
+		NewIndicator(26, i26, "", ""),
+		NewIndicator(27, i27, "", ""),
+		NewIndicator(40, i40, "", ""),
 	}, nil
 }

@@ -9,7 +9,7 @@ import (
 
 func TestCacheKey(t *testing.T) {
 	source := domain.AssetInfo{Code: "MTL", Issuer: "GISSUER", Type: domain.AssetTypeCreditAlphanum4}
-	dest := domain.EURMTLAsset
+	dest := domain.EURMTLAsset()
 	key := cacheKey(source, dest, "1")
 	expected := "MTL:GISSUER=>EURMTL:GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V:1"
 	if key != expected {
@@ -18,7 +18,7 @@ func TestCacheKey(t *testing.T) {
 }
 
 func TestCacheKeyNative(t *testing.T) {
-	key := cacheKey(domain.XLMAsset, domain.EURMTLAsset, "100")
+	key := cacheKey(domain.XLMAsset(), domain.EURMTLAsset(), "100")
 	if key != "native=>EURMTL:GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V:100" {
 		t.Errorf("cacheKey() for XLM = %q", key)
 	}
@@ -41,6 +41,29 @@ func TestCacheHitAndMiss(t *testing.T) {
 	_, ok = c.get("missing-key")
 	if ok {
 		t.Error("expected cache miss for missing key")
+	}
+}
+
+func TestParseDecimalOrZeroNil(t *testing.T) {
+	result := parseDecimalOrZero(nil)
+	if !result.IsZero() {
+		t.Errorf("parseDecimalOrZero(nil) = %s, want 0", result)
+	}
+}
+
+func TestParseDecimalOrZeroValid(t *testing.T) {
+	s := "42.5"
+	result := parseDecimalOrZero(&s)
+	if result.String() != "42.5" {
+		t.Errorf("parseDecimalOrZero(%q) = %s, want 42.5", s, result)
+	}
+}
+
+func TestParseDecimalOrZeroInvalid(t *testing.T) {
+	s := "not-a-number"
+	result := parseDecimalOrZero(&s)
+	if !result.IsZero() {
+		t.Errorf("parseDecimalOrZero(%q) = %s, want 0", s, result)
 	}
 }
 

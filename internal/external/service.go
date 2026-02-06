@@ -55,7 +55,7 @@ func (s *Service) ResolveValuation(ctx context.Context, val domain.AssetValuatio
 			return domain.ResolvedAssetValuation{}, fmt.Errorf("getting quote for %s: %w", val.RawValue.Symbol, err)
 		}
 
-		priceInEUR := decimal.NewFromFloat(quote.PriceInEUR)
+		priceInEUR := quote.PriceInEUR
 
 		// For compound values (e.g., "AU 1g"), multiply by quantity
 		if val.RawValue.Quantity != nil {
