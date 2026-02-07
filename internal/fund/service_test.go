@@ -188,6 +188,42 @@ func TestPriceTokenValuationResolutionFallback(t *testing.T) {
 	}
 }
 
+func TestNewServiceNilPortfolioPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for nil portfolio")
+		}
+	}()
+	NewService(nil, &mockPrice{}, &mockValuation{}, &mockExternal{})
+}
+
+func TestNewServiceNilPricePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for nil price")
+		}
+	}()
+	NewService(&mockPortfolio{}, nil, &mockValuation{}, &mockExternal{})
+}
+
+func TestNewServiceNilValuationPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for nil valuation")
+		}
+	}()
+	NewService(&mockPortfolio{}, &mockPrice{}, nil, &mockExternal{})
+}
+
+func TestNewServiceNilExternalPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for nil external")
+		}
+	}()
+	NewService(&mockPortfolio{}, &mockPrice{}, &mockValuation{}, nil)
+}
+
 func TestPartitionAccounts(t *testing.T) {
 	portfolios := []domain.FundAccountPortfolio{
 		{Name: "A", Type: domain.AccountTypeIssuer},

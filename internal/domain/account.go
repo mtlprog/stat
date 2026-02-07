@@ -23,8 +23,7 @@ type FundAccount struct {
 	Description string      `json:"description"`
 }
 
-// accountRegistry holds all 11 fund accounts.
-// Unexported to prevent external mutation.
+// accountRegistry holds all fund accounts. Unexported to prevent external mutation.
 var accountRegistry = []FundAccount{
 	// 8 non-other accounts (1 issuer + 4 subfond + 1 operational + 2 mutual)
 	{Name: "MAIN ISSUER", Type: AccountTypeIssuer, Address: IssuerAddress, Description: "Main token issuer account"},

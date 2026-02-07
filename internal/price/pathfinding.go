@@ -17,6 +17,9 @@ func (s *Service) getPathPrice(ctx context.Context, source, dest domain.AssetInf
 	// Try strictSend first
 	paths, err := s.horizon.FetchStrictSendPaths(ctx, source, amount, dest)
 	if err != nil {
+		if ctx.Err() != nil {
+			return domain.TokenPairPrice{}, ctx.Err()
+		}
 		slog.Warn("strictSend failed, trying strictReceive",
 			"source", source.Code, "dest", dest.Code, "error", err)
 	} else if len(paths) > 0 {

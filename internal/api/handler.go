@@ -89,11 +89,16 @@ func (h *Handler) GenerateSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("failed to marshal JSON response", "error", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("failed to encode JSON response", "error", err)
-	}
+	w.Write(data)
+	w.Write([]byte("\n"))
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

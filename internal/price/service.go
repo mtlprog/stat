@@ -108,10 +108,7 @@ func (s *Service) getSpotPrice(ctx context.Context, asset, baseAsset domain.Asse
 	obOK := obResult.err == nil
 
 	if !pathOK && !obOK {
-		if pathResult.err != nil {
-			return domain.TokenPairPrice{}, pathResult.err
-		}
-		return domain.TokenPairPrice{}, obResult.err
+		return domain.TokenPairPrice{}, fmt.Errorf("both price sources failed: %w", errors.Join(pathResult.err, obResult.err))
 	}
 
 	if pathOK && !obOK {

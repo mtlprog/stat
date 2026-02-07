@@ -15,9 +15,8 @@ type Config struct {
 	HorizonRetryMax       int
 	HorizonRetryBaseDelay time.Duration
 	CoinGeckoDelay        time.Duration
-	CoinGeckoRetryMax     int
-	QuoteStaleThreshold   time.Duration
-	QuoteWorkerInterval   time.Duration
+	CoinGeckoRetryMax    int
+	QuoteWorkerInterval  time.Duration
 	ReportWorkerInterval  time.Duration
 	HTTPPort              string
 	AdminAPIKey           string
@@ -32,9 +31,8 @@ func Load() Config {
 		HorizonRetryMax:       envOrDefaultInt("HORIZON_RETRY_MAX", 5),
 		HorizonRetryBaseDelay: envOrDefaultDuration("HORIZON_RETRY_BASE_DELAY", 2*time.Second),
 		CoinGeckoDelay:        envOrDefaultDuration("COINGECKO_DELAY", 6*time.Second),
-		CoinGeckoRetryMax:     envOrDefaultInt("COINGECKO_RETRY_MAX", 5),
-		QuoteStaleThreshold:   envOrDefaultDuration("QUOTE_STALE_THRESHOLD", 2*time.Hour),
-		QuoteWorkerInterval:   envOrDefaultDuration("QUOTE_WORKER_INTERVAL", 1*time.Hour),
+		CoinGeckoRetryMax:    envOrDefaultInt("COINGECKO_RETRY_MAX", 5),
+		QuoteWorkerInterval:  envOrDefaultDuration("QUOTE_WORKER_INTERVAL", 1*time.Hour),
 		ReportWorkerInterval:  envOrDefaultDuration("REPORT_WORKER_INTERVAL", 24*time.Hour),
 		HTTPPort:              envOrDefault("HTTP_PORT", "8080"),
 		AdminAPIKey:           os.Getenv("ADMIN_API_KEY"),

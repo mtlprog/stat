@@ -8,7 +8,8 @@ import (
 )
 
 // calculateAccountTotalEURMTL computes the total EURMTL value for an account.
-// For NFTs (balance=0.0000001), uses the price directly as the total value.
+// For NFTs (balance=0.0000001), PriceInEURMTL holds the total valuation (from the NFT valuation account),
+// so it is summed directly without multiplication.
 // For regular tokens, multiplies balance by unit price. Also adds XLM value if the EURMTL rate is available.
 func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalance string, xlmPriceInEURMTL *string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
