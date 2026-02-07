@@ -31,7 +31,7 @@ func (a AssetInfo) Canonical() string {
 	return fmt.Sprintf("%s:%s", a.Code, a.Issuer)
 }
 
-// AssetTypeFromCode determines the Stellar asset type from the code length.
+// AssetTypeFromCode determines the Stellar asset type from the code string.
 func AssetTypeFromCode(code string) AssetType {
 	if code == "XLM" || code == "native" {
 		return AssetTypeNative
@@ -67,7 +67,7 @@ var (
 	}
 )
 
-// EURMTLAsset returns the fund's base stablecoin asset info.
+// EURMTLAsset returns the fund's base asset (EUR-pegged stablecoin).
 func EURMTLAsset() AssetInfo { return eurmtlAsset }
 
 // XLMAsset returns the Stellar native asset info.

@@ -51,7 +51,7 @@ func (s *Service) FetchPortfolio(ctx context.Context, accountID string) (domain.
 			Asset: domain.AssetInfo{
 				Code:   b.AssetCode,
 				Issuer: b.AssetIssuer,
-				Type:   domain.AssetTypeFromCode(b.AssetCode),
+				Type:   domain.AssetType(b.AssetType),
 			},
 			Balance: b.Balance,
 			Limit:   b.Limit,

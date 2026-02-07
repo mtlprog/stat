@@ -2,6 +2,7 @@ package price
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -89,6 +90,10 @@ func (s *Service) fetchOrderbookData(ctx context.Context, source, dest domain.As
 			data.AMM.Bid = spot
 			data.AMMPoolID = &pool.ID
 		}
+	}
+
+	if err != nil && poolErr != nil {
+		return data, fmt.Errorf("both orderbook and pool fetch failed: ob: %w, pool: %v", err, poolErr)
 	}
 
 	// Select best source: lower ask wins (traditional orderbook vs AMM)

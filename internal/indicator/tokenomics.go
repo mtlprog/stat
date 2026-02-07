@@ -37,10 +37,10 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 		}
 	}
 
-	// I27: Holders with >= 1 share (placeholder — requires scanning all holders)
+	// I27: Holders with >= 1 share (placeholder - returns zero, requires scanning all holders)
 	i27 := decimal.Zero
 
-	// I18: Shareholders by EURMTL (dividend recipients — placeholder)
+	// I18: Shareholders by EURMTL (placeholder - returns zero, requires dividend recipient data)
 	i18 := decimal.Zero
 
 	// I21: Average Shareholding = I5 / I27
@@ -49,25 +49,25 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 		i21 = i5.Div(i27)
 	}
 
-	// I22: Average Share Price = I1 / I27
+	// I22: Average Value per Shareholder = I1 / I27
 	i22 := decimal.Zero
 	if !i27.IsZero() {
 		i22 = i1.Div(i27)
 	}
 
-	// I23: Median shareholding size (requires full holder list — placeholder)
+	// I23: Median shareholding size (placeholder - returns zero, requires full holder list)
 	i23 := decimal.Zero
 
-	// I25: EURMTL payment per day (placeholder — requires payment history)
+	// I25: EURMTL payment per day (placeholder - returns zero, requires payment history)
 	i25 := decimal.Zero
 
-	// I26: EURMTL payment total 30d (placeholder)
+	// I26: EURMTL payment total 30d (placeholder - returns zero, requires payment history)
 	i26 := decimal.Zero
 
 	// I40: MTLAP holder count
 	i40 := decimal.Zero
 	if c.Horizon != nil {
-		mtlapAsset := domain.AssetInfo{Code: "MTLAP", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum4}
+		mtlapAsset := domain.NewAssetInfo("MTLAP", domain.IssuerAddress)
 		count, err := c.Horizon.FetchAssetHolders(ctx, mtlapAsset)
 		if err != nil {
 			slog.Warn("failed to fetch asset holders", "asset", "MTLAP", "error", err)

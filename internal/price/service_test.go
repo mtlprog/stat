@@ -229,6 +229,67 @@ func TestGetTokenPricesBothFail(t *testing.T) {
 	}
 }
 
+func TestGetPathPriceFallbackToStrictReceive(t *testing.T) {
+	mock := &mockHorizon{
+		strictSendErr: errors.New("strictSend failed"),
+		strictReceivePaths: []horizon.HorizonPathRecord{
+			{SourceAmount: "1", DestinationAmount: "0.75"},
+		},
+		orderbookErr: errors.New("no orderbook"),
+		poolsErr:     errors.New("no pools"),
+	}
+
+	svc := NewService(mock)
+	result, err := svc.GetPrice(context.Background(), testAsset(), domain.EURMTLAsset(), "100")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Price != "0.75" {
+		t.Errorf("Price = %q, want 0.75", result.Price)
+	}
+}
+
+func TestGetBidPriceSuccess(t *testing.T) {
+	mock := &mockHorizon{
+		orderbook: horizon.HorizonOrderbook{
+			Bids: []horizon.HorizonOrderbookEntry{{Price: "1.5", Amount: "100"}},
+		},
+	}
+
+	svc := NewService(mock)
+	bid, err := svc.GetBidPrice(context.Background(), testAsset(), domain.EURMTLAsset())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bid.String() != "1.5" {
+		t.Errorf("bid = %s, want 1.5", bid.String())
+	}
+}
+
+func TestGetBidPriceNoBids(t *testing.T) {
+	mock := &mockHorizon{
+		orderbook: horizon.HorizonOrderbook{},
+	}
+
+	svc := NewService(mock)
+	_, err := svc.GetBidPrice(context.Background(), testAsset(), domain.EURMTLAsset())
+	if !errors.Is(err, ErrNoPrice) {
+		t.Errorf("err = %v, want ErrNoPrice", err)
+	}
+}
+
+func TestGetBidPriceFetchError(t *testing.T) {
+	mock := &mockHorizon{
+		orderbookErr: errors.New("network error"),
+	}
+
+	svc := NewService(mock)
+	_, err := svc.GetBidPrice(context.Background(), testAsset(), domain.EURMTLAsset())
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
 func testAsset() domain.AssetInfo {
 	return domain.AssetInfo{
 		Code:   "MTL",

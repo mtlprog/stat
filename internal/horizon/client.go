@@ -43,7 +43,8 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 			return nil, fmt.Errorf("executing request: %w", err)
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		const maxResponseSize = 10 << 20 // 10 MB
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("reading response: %w", err)
