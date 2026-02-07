@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
-	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
@@ -23,10 +21,8 @@ import (
 	"github.com/mtlprog/stat/internal/snapshot"
 	"github.com/mtlprog/stat/internal/valuation"
 	"github.com/mtlprog/stat/internal/worker"
+	"github.com/mtlprog/stat/migrations"
 )
-
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -46,11 +42,7 @@ func main() {
 	defer pool.Close()
 
 	// Run migrations
-	migrationsSub, err := fs.Sub(migrationsFS, "migrations")
-	if err != nil {
-		log.Fatalf("Failed to create migrations sub-fs: %v", err)
-	}
-	if err := database.RunMigrations(ctx, pool, migrationsSub); err != nil {
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
