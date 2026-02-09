@@ -96,19 +96,25 @@ func (s *Service) fetchOrderbookData(ctx context.Context, source, dest domain.As
 		return data, fmt.Errorf("both orderbook and pool fetch failed: ob: %w, pool: %v", err, poolErr)
 	}
 
-	// Select best source: lower ask wins (traditional orderbook vs AMM)
+	// Select best source: higher bid wins (for fund valuation, selling perspective)
 	obHasPrice := data.Orderbook.Ask != nil || data.Orderbook.Bid != nil
 	ammHasPrice := data.AMM.Ask != nil
+	obHasBid := data.Orderbook.Bid != nil
+	ammHasBid := data.AMM.Bid != nil
 
 	switch {
-	case obHasPrice && ammHasPrice:
-		obAsk := parseDecimalOrZero(data.Orderbook.Ask)
-		ammAsk := parseDecimalOrZero(data.AMM.Ask)
-		if obAsk.LessThanOrEqual(ammAsk) {
+	case obHasBid && ammHasBid:
+		obBid := parseDecimalOrZero(data.Orderbook.Bid)
+		ammBid := parseDecimalOrZero(data.AMM.Bid)
+		if obBid.GreaterThanOrEqual(ammBid) {
 			data.BestSource = "orderbook"
 		} else {
 			data.BestSource = "amm"
 		}
+	case obHasBid:
+		data.BestSource = "orderbook"
+	case ammHasBid:
+		data.BestSource = "amm"
 	case obHasPrice:
 		data.BestSource = "orderbook"
 	case ammHasPrice:

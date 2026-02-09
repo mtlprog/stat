@@ -10,17 +10,17 @@ import (
 
 func TestCalculateAccountTotalEURMTLNormal(t *testing.T) {
 	price1 := "2.0"
-	price2 := "100.0"
+	nftValue := "100.0"
 	xlmPrice := "0.5"
 
 	tokens := []domain.TokenPriceWithBalance{
 		{Balance: "10", PriceInEURMTL: &price1},
-		{Balance: "0.0000001", PriceInEURMTL: &price2, IsNFT: true},
+		{Balance: "0.0000001", ValueInEURMTL: &nftValue, IsNFT: true},
 	}
 
 	total := calculateAccountTotalEURMTL(tokens, "1000", &xlmPrice)
 
-	// 10*2 + 100 (NFT) + 1000*0.5 = 20 + 100 + 500 = 620
+	// 10*2 + 100 (NFT value) + 1000*0.5 = 20 + 100 + 500 = 620
 	if !total.Equal(decimal.NewFromInt(620)) {
 		t.Errorf("totalEURMTL = %s, want 620", total)
 	}

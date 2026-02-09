@@ -2,7 +2,6 @@ package valuation
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -56,7 +55,7 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 	wg.Wait()
 
 	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+		slog.Warn("some valuation scans failed", "errorCount", len(errs), "successCount", len(allValuations))
 	}
 
 	return deduplicateValuations(allValuations), nil

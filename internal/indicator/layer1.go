@@ -36,7 +36,7 @@ func (c *Layer1Calculator) Calculate(ctx context.Context, data domain.FundStruct
 	// I7: MTLRECT in circulation — placeholder, always returns 0. Full implementation requires fetching issuer balances.
 	i7 := decimal.NewFromInt(0)
 
-	// I5: Total shares = I6 + I7
+	// I5: Total shares = I6 + I7 (currently zero since I6, I7 are placeholders; cascades to I1, I8, I22, etc.)
 	i5 := i6.Add(i7)
 
 	// I10: Share Market Price (MTL bid in EURMTL)
