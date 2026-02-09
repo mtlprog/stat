@@ -196,7 +196,9 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 	// Cross-rate calculation: derive missing price via EURMTL/XLM rate
 	if (eurmtlErr == nil && xlmErr != nil) || (eurmtlErr != nil && xlmErr == nil) {
 		crossRate, crossErr := s.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
-		if crossErr == nil {
+		if crossErr != nil {
+			slog.Warn("cross-rate derivation failed", "asset", asset.Code, "error", crossErr)
+		} else {
 			rate, rateErr := decimal.NewFromString(crossRate.Price)
 			if rateErr != nil {
 				slog.Warn("cross-rate price unparseable", "price", crossRate.Price, "error", rateErr)

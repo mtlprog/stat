@@ -79,7 +79,7 @@ func TestFetchOrderbookDataBestSourceSelection(t *testing.T) {
 			name: "orderbook wins over AMM",
 			mock: &mockHorizon{
 				orderbook: horizon.HorizonOrderbook{
-					Asks: []horizon.HorizonOrderbookEntry{{Price: "0.4", Amount: "100"}},
+					Bids: []horizon.HorizonOrderbookEntry{{Price: "0.7", Amount: "100"}},
 				},
 				pools: []horizon.HorizonLiquidityPool{{
 					ID: "pool",
@@ -95,7 +95,7 @@ func TestFetchOrderbookDataBestSourceSelection(t *testing.T) {
 			name: "AMM wins over orderbook",
 			mock: &mockHorizon{
 				orderbook: horizon.HorizonOrderbook{
-					Asks: []horizon.HorizonOrderbookEntry{{Price: "0.8", Amount: "100"}},
+					Bids: []horizon.HorizonOrderbookEntry{{Price: "0.4", Amount: "100"}},
 				},
 				pools: []horizon.HorizonLiquidityPool{{
 					ID: "pool",

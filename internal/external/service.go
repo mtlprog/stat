@@ -40,6 +40,7 @@ func (s *Service) FetchAndStoreQuotes(ctx context.Context) error {
 }
 
 // ResolveValuation resolves an asset valuation to a EURMTL value using stored external quotes.
+// For external quotes, EUR prices are treated as 1:1 with EURMTL.
 func (s *Service) ResolveValuation(ctx context.Context, val domain.AssetValuation) (domain.ResolvedAssetValuation, error) {
 	resolved := domain.ResolvedAssetValuation{AssetValuation: val}
 

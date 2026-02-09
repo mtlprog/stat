@@ -177,12 +177,13 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 	if val != nil {
 		resolved, err := s.external.ResolveValuation(ctx, *val)
 		if err != nil {
-			slog.Warn("manual valuation resolution failed, using market price",
-				"token", tb.Asset.Code,
-				"valuationType", val.ValuationType,
-				"sourceAccount", val.SourceAccount,
-				"error", err,
-			)
+			if priceErr != nil {
+				slog.Warn("manual valuation resolution failed and no market price available",
+					"token", tb.Asset.Code, "error", err, "marketPriceError", priceErr)
+			} else {
+				slog.Warn("manual valuation resolution failed, falling back to market price",
+					"token", tb.Asset.Code, "error", err)
+			}
 		} else {
 			result.PriceInEURMTL = &resolved.ValueInEURMTL
 			if isNFT {
@@ -194,8 +195,7 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 			result.NFTValuationAccount = val.SourceAccount
 
 			// Derive XLM value from EURMTL valuation
-			// Use XLM→EURMTL rate (xlmPriceInEURMTL) so that:
-			//   priceInXLM = priceInEURMTL / xlmPriceInEURMTL
+			// priceInXLM = valuationInEURMTL / xlmRate.Price
 			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.XLMAsset(), domain.EURMTLAsset(), "1")
 			if xlmErr != nil {
 				slog.Warn("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)

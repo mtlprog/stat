@@ -8,13 +8,12 @@ import (
 )
 
 // calculateAccountTotalEURMTL computes the total EURMTL value for an account.
-// For NFTs (balance=0.0000001), PriceInEURMTL holds the total valuation (from the NFT valuation account),
-// so it is summed directly without multiplication.
+// For NFTs, ValueInEURMTL holds the total valuation (not a per-unit price), so it is used directly.
 // For regular tokens, multiplies balance by unit price. Also adds XLM value if the EURMTL rate is available.
 func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalance string, xlmPriceInEURMTL *string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
 		if t.IsNFT {
-			return domain.SafeSum(acc, domain.SafeParse(lo.FromPtr(t.PriceInEURMTL)))
+			return domain.SafeSum(acc, domain.SafeParse(lo.FromPtr(t.ValueInEURMTL)))
 		}
 		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, lo.FromPtr(t.PriceInEURMTL)))
 	}, decimal.Zero)
@@ -29,10 +28,12 @@ func calculateAccountTotalEURMTL(tokens []domain.TokenPriceWithBalance, xlmBalan
 }
 
 // calculateAccountTotalXLM computes the total XLM value for an account.
+// For NFTs, ValueInXLM holds the total XLM valuation, so it is used directly.
+// For regular tokens, multiplies balance by XLM unit price. The native XLM balance is added directly.
 func calculateAccountTotalXLM(tokens []domain.TokenPriceWithBalance, xlmBalance string) decimal.Decimal {
 	total := lo.Reduce(tokens, func(acc decimal.Decimal, t domain.TokenPriceWithBalance, _ int) decimal.Decimal {
 		if t.IsNFT {
-			return domain.SafeSum(acc, domain.SafeParse(lo.FromPtr(t.PriceInXLM)))
+			return domain.SafeSum(acc, domain.SafeParse(lo.FromPtr(t.ValueInXLM)))
 		}
 		return domain.SafeSum(acc, domain.SafeMultiply(t.Balance, lo.FromPtr(t.PriceInXLM)))
 	}, decimal.Zero)

@@ -58,7 +58,6 @@ var (
 )
 
 // FetchPrices fetches EUR prices for all configured symbols from CoinGecko.
-// EURMTL is treated as 1:1 with EUR for external price resolution.
 func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.Decimal, error) {
 	// Collect unique CoinGecko IDs
 	uniqueIDs := make(map[string]bool)
@@ -112,6 +111,13 @@ func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.D
 		}
 	}
 
+	if len(result) == 0 {
+		return nil, fmt.Errorf("CoinGecko returned no valid prices (expected %d symbols)", len(symbolMapping))
+	}
+	if len(result) < len(symbolMapping) {
+		slog.Warn("CoinGecko returned partial prices", "got", len(result), "expected", len(symbolMapping))
+	}
+
 	return result, nil
 }
 
@@ -141,7 +147,8 @@ func (c *CoinGeckoClient) fetchWithRetry(ctx context.Context, url string) ([]byt
 			return nil, fmt.Errorf("CoinGecko request failed: %w", err)
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		const maxResponseSize = 1 << 20 // 1 MB
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("reading CoinGecko response: %w", err)

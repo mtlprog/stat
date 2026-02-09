@@ -36,7 +36,7 @@ var indicatorRegistry = map[int]IndicatorMeta{
 	17: {Name: "Annual Dividend Yield 2", Unit: "%"},
 	18: {Name: "Shareholders by EURMTL", Unit: "accounts"},
 	21: {Name: "Average Shareholding", Unit: "shares"},
-	22: {Name: "Average Share Price", Unit: "EURMTL"},
+	22: {Name: "Average Value per Shareholder", Unit: "EURMTL"},
 	23: {Name: "Median Shareholding", Unit: "shares"},
 	24: {Name: "EURMTL Participants", Unit: "accounts"},
 	25: {Name: "EURMTL Daily Volume", Unit: "EURMTL"},

@@ -1,6 +1,7 @@
 package indicator
 
 import (
+	"log/slog"
 	"math"
 
 	"github.com/samber/lo"
@@ -25,7 +26,10 @@ func Variance(values []decimal.Decimal) decimal.Decimal {
 // StdDev calculates the standard deviation of a decimal slice.
 func StdDev(values []decimal.Decimal) decimal.Decimal {
 	v := Variance(values)
-	f, _ := v.Float64()
+	f, exact := v.Float64()
+	if !exact {
+		slog.Warn("precision loss in StdDev float64 conversion", "variance", v.String())
+	}
 	return decimal.NewFromFloat(math.Sqrt(f))
 }
 
@@ -55,7 +59,10 @@ func DownsideStdDev(returns []decimal.Decimal, threshold decimal.Decimal) decima
 	}, decimal.Zero)
 
 	variance := sumSqDiff.Div(decimal.NewFromInt(int64(len(downside))))
-	f, _ := variance.Float64()
+	f, exact := variance.Float64()
+	if !exact {
+		slog.Warn("precision loss in DownsideStdDev float64 conversion", "variance", variance.String())
+	}
 	return decimal.NewFromFloat(math.Sqrt(f))
 }
 
