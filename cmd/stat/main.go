@@ -78,8 +78,13 @@ func main() {
 	reportWorker := worker.NewReportWorker(snapshotSvc, cfg.ReportWorkerInterval)
 	go reportWorker.Run(ctx)
 
-	// Indicator service (HistoricalData still nil — requires snapshot history, a separate feature)
-	indicatorSvc := indicator.NewService(priceSvc, horizonClient, nil)
+	// Wire historical data for time-series indicators (I55, etc.)
+	hist := &indicator.HistoricalData{
+		Repo: snapshotRepo,
+		Slug: "mtlf",
+	}
+
+	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
 
 	if cfg.AdminAPIKey == "" {
 		slog.Warn("ADMIN_API_KEY not set, generate endpoint is unprotected")

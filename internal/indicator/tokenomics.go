@@ -37,8 +37,23 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 		}
 	}
 
-	// I27: Holders with >= 1 share (placeholder - returns zero, requires scanning all holders)
+	// I27: Accounts holding >= 1 MTL or >= 1 MTLRECT (sum of both holder counts; may overcount accounts holding both)
 	i27 := decimal.Zero
+	if c.Horizon != nil {
+		mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
+		mtlCount, err := c.Horizon.FetchAssetHolders(ctx, mtlAsset)
+		if err != nil {
+			slog.Warn("failed to fetch MTL holders", "error", err)
+		} else {
+			mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
+			mtlrectCount, err := c.Horizon.FetchAssetHolders(ctx, mtlrectAsset)
+			if err != nil {
+				slog.Warn("failed to fetch MTLRECT holders", "error", err)
+			} else {
+				i27 = decimal.NewFromInt(int64(mtlCount + mtlrectCount))
+			}
+		}
+	}
 
 	// I18: Shareholders by EURMTL (placeholder - returns zero, requires dividend recipient data)
 	i18 := decimal.Zero

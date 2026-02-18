@@ -3,13 +3,21 @@ package horizon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
+
+	"github.com/shopspring/decimal"
 
 	"github.com/mtlprog/stat/internal/domain"
 )
 
 // HorizonLiquidityPoolsResponse wraps the embedded records for liquidity pool queries.
 type HorizonLiquidityPoolsResponse struct {
+	Links struct {
+		Next struct {
+			Href string `json:"href"`
+		} `json:"next"`
+	} `json:"_links"`
 	Embedded struct {
 		Records []HorizonLiquidityPool `json:"records"`
 	} `json:"_embedded"`
@@ -35,4 +43,46 @@ func (c *Client) FetchLiquidityPools(ctx context.Context, reserveA, reserveB dom
 		return nil, fmt.Errorf("fetching liquidity pools: %w", err)
 	}
 	return resp.Embedded.Records, nil
+}
+
+// FetchAllPoolReservesForAsset returns the total amount of the given asset locked across all AMM pools.
+// It paginates through all results using Horizon's cursor-based pagination.
+func (c *Client) FetchAllPoolReservesForAsset(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error) {
+	assetFilter := asset.Code + ":" + asset.Issuer
+	path := "/liquidity_pools?" + url.Values{
+		"reserves": []string{assetFilter},
+		"limit":    []string{"200"},
+	}.Encode()
+
+	total := decimal.Zero
+	for path != "" {
+		var resp HorizonLiquidityPoolsResponse
+		if err := c.getJSON(ctx, path, &resp); err != nil {
+			return decimal.Zero, fmt.Errorf("fetching liquidity pools for %s: %w", asset.Code, err)
+		}
+
+		for _, pool := range resp.Embedded.Records {
+			for _, reserve := range pool.Reserves {
+				if reserve.Asset == assetFilter {
+					amt, err := decimal.NewFromString(reserve.Amount)
+					if err != nil {
+						slog.Warn("failed to parse pool reserve amount", "pool", pool.ID, "asset", reserve.Asset, "error", err)
+						continue
+					}
+					total = total.Add(amt)
+				}
+			}
+		}
+
+		if len(resp.Embedded.Records) == 0 || resp.Links.Next.Href == "" {
+			break
+		}
+
+		u, err := url.Parse(resp.Links.Next.Href)
+		if err != nil {
+			break
+		}
+		path = u.Path + "?" + u.RawQuery
+	}
+	return total, nil
 }
