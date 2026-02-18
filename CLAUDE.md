@@ -16,6 +16,41 @@ go fmt ./...
 go vet ./...
 ```
 
+## Architecture
+
+### Indicator System
+- Indicators are computed **on-the-fly** from snapshots — never stored in the DB.
+- Calculation is a layered DAG: `Layer0 → Layer1 → Layer2 → Dividend / Analytics / Tokenomics`.
+- Each `Calculator` declares `IDs()` and `Dependencies()`; `Registry.CalculateAll` resolves order via topological sort.
+- To add a new calculator: implement `Calculator` interface, define its Horizon interface in the same file, register in `service.go`, extend `IndicatorHorizon` if it needs `horizon.Client`.
+
+### Snapshot Data Model
+- `fund_snapshots.data` (JSONB) stores `domain.FundStructureData` with per-account token balances and prices.
+- Token prices captured at snapshot time live in `FundAccountPortfolio.Tokens[].PriceInEURMTL` — use these for historical price lookups (see `findBTCPrice` in `layer0.go` as a pattern).
+- `snapshot.Repository.GetByDate` requires exact date match (midnight UTC); snapshots are stored by the `ReportWorker` using `time.Date(..., time.UTC)`.
+
+### Key Domain Constants
+- `domain.IssuerAddress` — main fund issuer Stellar address
+- `domain.EURMTLAsset()` — fund base asset (EUR-pegged stablecoin)
+- `domain.AccountRegistry()` — all 11 fund accounts (used to exclude fund addresses from external payment filtering)
+
+## Horizon API Patterns
+
+### Service Wiring
+- `horizon.Client` → `IndicatorHorizon` (combined interface: `TokenomicsHorizon + CirculationHorizon + DividendHorizon`)
+- `price.Service` → `HorizonPriceSource` (orderbook / pathfinding only)
+- Both are passed to `indicator.NewService(priceSvc, horizonClient, hist)` in `main.go`.
+
+### Cursor-Based Pagination
+```go
+// Extract next-page path from Horizon's _links.next.href:
+u, err := url.Parse(resp.Links.Next.Href)
+if err != nil { break }
+path = u.Path + "?" + u.RawQuery
+```
+- Add `Links.Next.Href` field to response structs when pagination is needed.
+- When paginating payments ordered desc by time, **check the timestamp before type/direction filters** so non-payment records don't block early termination.
+
 ## Git Conventions
 
 - **Commit messages**: Use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)

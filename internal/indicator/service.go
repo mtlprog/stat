@@ -7,6 +7,13 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
+// IndicatorHorizon combines all Horizon interfaces required by indicator calculators.
+type IndicatorHorizon interface {
+	TokenomicsHorizon
+	CirculationHorizon
+	DividendHorizon
+}
+
 // Service manages indicator calculation.
 type Service struct {
 	registry *Registry
@@ -15,12 +22,12 @@ type Service struct {
 
 // NewService creates a new indicator Service with all calculators registered.
 // Nil dependencies are allowed but will limit which indicators can be computed.
-func NewService(horizonPrice HorizonPriceSource, tokenomicsHorizon TokenomicsHorizon, hist *HistoricalData) *Service {
+func NewService(horizonPrice HorizonPriceSource, h IndicatorHorizon, hist *HistoricalData) *Service {
 	if horizonPrice == nil {
 		slog.Warn("indicator service: horizonPrice is nil, Layer 1 market prices will be zero")
 	}
-	if tokenomicsHorizon == nil {
-		slog.Warn("indicator service: tokenomicsHorizon is nil, tokenomics indicators will be zero")
+	if h == nil {
+		slog.Warn("indicator service: horizon is nil, circulation, tokenomics, and dividend indicators will be zero")
 	}
 	registry := NewRegistry()
 
@@ -28,19 +35,19 @@ func NewService(horizonPrice HorizonPriceSource, tokenomicsHorizon TokenomicsHor
 	registry.Register(&Layer0Calculator{})
 
 	// Layer 1: derived values
-	registry.Register(&Layer1Calculator{Horizon: horizonPrice})
+	registry.Register(&Layer1Calculator{Horizon: horizonPrice, Circulation: h})
 
 	// Layer 2: ratios
 	registry.Register(&Layer2Calculator{})
 
 	// Dividend indicators
-	registry.Register(&DividendCalculator{})
+	registry.Register(&DividendCalculator{Horizon: h})
 
 	// Analytics indicators
 	registry.Register(&AnalyticsCalculator{})
 
 	// Tokenomics indicators
-	registry.Register(&TokenomicsCalculator{Horizon: tokenomicsHorizon})
+	registry.Register(&TokenomicsCalculator{Horizon: h})
 
 	return &Service{registry: registry, hist: hist}
 }
