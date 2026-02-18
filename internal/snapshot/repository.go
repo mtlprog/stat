@@ -28,6 +28,7 @@ type Repository interface {
 	Save(ctx context.Context, entityID int, date time.Time, data json.RawMessage) error
 	GetLatest(ctx context.Context, entitySlug string) (*Snapshot, error)
 	GetByDate(ctx context.Context, entitySlug string, date time.Time) (*Snapshot, error)
+	GetNearestBefore(ctx context.Context, entitySlug string, date time.Time) (*Snapshot, error)
 	List(ctx context.Context, entitySlug string, limit int) ([]Snapshot, error)
 	GetEntityID(ctx context.Context, slug string) (int, error)
 	EnsureEntity(ctx context.Context, slug, name, description string) (int, error)
@@ -86,6 +87,25 @@ func (r *PgRepository) GetByDate(ctx context.Context, entitySlug string, date ti
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("getting snapshot by date: %w", err)
+	}
+	return &s, nil
+}
+
+// GetNearestBefore returns the most recent snapshot at or before the given date.
+func (r *PgRepository) GetNearestBefore(ctx context.Context, entitySlug string, date time.Time) (*Snapshot, error) {
+	var s Snapshot
+	err := r.pool.QueryRow(ctx,
+		`SELECT fs.id, fs.entity_id, fs.snapshot_date, fs.data, fs.created_at
+		 FROM fund_snapshots fs
+		 JOIN fund_entities fe ON fe.id = fs.entity_id
+		 WHERE fe.slug = $1 AND fs.snapshot_date <= $2
+		 ORDER BY fs.snapshot_date DESC
+		 LIMIT 1`, entitySlug, date).Scan(&s.ID, &s.EntityID, &s.SnapshotDate, &s.Data, &s.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("getting nearest snapshot before %s: %w", date.Format("2006-01-02"), err)
 	}
 	return &s, nil
 }

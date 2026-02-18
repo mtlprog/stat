@@ -38,6 +38,15 @@ func (m *mockSnapshotRepo) GetByDate(_ context.Context, _ string, date time.Time
 	return nil, snapshot.ErrNotFound
 }
 
+func (m *mockSnapshotRepo) GetNearestBefore(_ context.Context, _ string, date time.Time) (*snapshot.Snapshot, error) {
+	for _, s := range m.snapshots {
+		if !s.SnapshotDate.After(date) {
+			return &s, nil
+		}
+	}
+	return nil, snapshot.ErrNotFound
+}
+
 func (m *mockSnapshotRepo) List(_ context.Context, _ string, limit int) ([]snapshot.Snapshot, error) {
 	m.lastListLimit = limit
 	if limit > len(m.snapshots) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/mtlprog/stat/internal/domain"
@@ -14,15 +15,28 @@ type FundStructureService interface {
 	GetFundStructure(ctx context.Context) (domain.FundStructureData, error)
 }
 
-// Service manages snapshot generation and retrieval.
-type Service struct {
-	fund FundStructureService
-	repo Repository
+// MetricsEnricher computes live metrics and injects them into snapshot data at generation time.
+// This enables accurate period-over-period comparison by storing values that would otherwise
+// require live Horizon queries, which are unavailable for historical snapshots.
+type MetricsEnricher interface {
+	EnrichMetrics(ctx context.Context, data *domain.FundStructureData) error
 }
 
-// NewService creates a new SnapshotService.
-func NewService(fund FundStructureService, repo Repository) *Service {
-	return &Service{fund: fund, repo: repo}
+// Service manages snapshot generation and retrieval.
+type Service struct {
+	fund     FundStructureService
+	repo     Repository
+	enricher MetricsEnricher
+}
+
+// NewService creates a new SnapshotService. An optional MetricsEnricher can be provided
+// to store live metrics (I10, I6/I7, I11) in each snapshot for historical comparison.
+func NewService(fund FundStructureService, repo Repository, enrichers ...MetricsEnricher) *Service {
+	var enricher MetricsEnricher
+	if len(enrichers) > 0 {
+		enricher = enrichers[0]
+	}
+	return &Service{fund: fund, repo: repo, enricher: enricher}
 }
 
 // Generate creates a new snapshot for the given entity slug and date.
@@ -35,6 +49,12 @@ func (s *Service) Generate(ctx context.Context, slug string, date time.Time) (do
 	fundData, err := s.fund.GetFundStructure(ctx)
 	if err != nil {
 		return domain.FundStructureData{}, fmt.Errorf("generating fund structure: %w", err)
+	}
+
+	if s.enricher != nil {
+		if err := s.enricher.EnrichMetrics(ctx, &fundData); err != nil {
+			slog.Warn("failed to enrich snapshot with live metrics", "error", err)
+		}
 	}
 
 	data, err := json.Marshal(fundData)

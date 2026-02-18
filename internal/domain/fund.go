@@ -23,6 +23,16 @@ type AggregatedTotals struct {
 	TokenCount   int             `json:"tokenCount"`
 }
 
+// FundLiveMetrics stores live-computed metrics captured at snapshot generation time.
+// Indicator calculators prefer these values over live Horizon calls, enabling accurate
+// period-over-period comparison from stored snapshots.
+type FundLiveMetrics struct {
+	MTLMarketPrice     *string `json:"mtl_market_price,omitempty"`
+	MTLCirculation     *string `json:"mtl_circulation,omitempty"`
+	MTLRECTCirculation *string `json:"mtlrect_circulation,omitempty"`
+	MonthlyDividends   *string `json:"monthly_dividends,omitempty"`
+}
+
 // FundStructureData is the top-level output of the fund aggregation pipeline.
 type FundStructureData struct {
 	Accounts         []FundAccountPortfolio `json:"accounts"`
@@ -30,4 +40,5 @@ type FundStructureData struct {
 	OtherAccounts    []FundAccountPortfolio `json:"otherAccounts"`
 	AggregatedTotals AggregatedTotals       `json:"aggregatedTotals"`
 	Warnings         []string               `json:"warnings,omitempty"`
+	LiveMetrics      *FundLiveMetrics       `json:"live_metrics,omitempty"`
 }

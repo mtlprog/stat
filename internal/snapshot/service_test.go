@@ -53,6 +53,13 @@ func (m *mockRepo) GetByDate(_ context.Context, _ string, _ time.Time) (*Snapsho
 	return m.byDate, nil
 }
 
+func (m *mockRepo) GetNearestBefore(_ context.Context, _ string, _ time.Time) (*Snapshot, error) {
+	if m.byDateErr != nil {
+		return nil, m.byDateErr
+	}
+	return m.byDate, nil
+}
+
 func (m *mockRepo) List(_ context.Context, _ string, _ int) ([]Snapshot, error) {
 	return m.list, m.listErr
 }
