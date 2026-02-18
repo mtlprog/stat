@@ -112,6 +112,10 @@ func (m *mockTokenomicsHorizon) FetchAssetHolders(_ context.Context, asset domai
 	return 0, nil
 }
 
+func (m *mockTokenomicsHorizon) FetchAllAssetHolderIDs(_ context.Context, _ domain.AssetInfo) ([]string, error) {
+	return nil, nil
+}
+
 func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 	calc := &TokenomicsCalculator{
 		Horizon: &mockTokenomicsHorizon{

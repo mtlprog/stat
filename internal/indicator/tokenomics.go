@@ -14,9 +14,10 @@ type TokenomicsCalculator struct {
 	Horizon TokenomicsHorizon
 }
 
-// TokenomicsHorizon provides access to Horizon for asset holder counts.
+// TokenomicsHorizon provides access to Horizon for asset holder counts and IDs.
 type TokenomicsHorizon interface {
 	FetchAssetHolders(ctx context.Context, asset domain.AssetInfo) (int, error)
+	FetchAllAssetHolderIDs(ctx context.Context, asset domain.AssetInfo) ([]string, error)
 }
 
 func (c *TokenomicsCalculator) IDs() []int          { return []int{18, 21, 22, 23, 24, 25, 26, 27, 40} }
@@ -37,21 +38,31 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 		}
 	}
 
-	// I27: Accounts holding >= 1 MTL or >= 1 MTLRECT (sum of both holder counts; may overcount accounts holding both)
+	// I27: Accounts holding >= 1 MTL or >= 1 MTLRECT (union to avoid double-counting)
 	i27 := decimal.Zero
 	if c.Horizon != nil {
 		mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
-		mtlCount, err := c.Horizon.FetchAssetHolders(ctx, mtlAsset)
-		if err != nil {
-			slog.Warn("failed to fetch MTL holders", "error", err)
-		} else {
-			mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
-			mtlrectCount, err := c.Horizon.FetchAssetHolders(ctx, mtlrectAsset)
-			if err != nil {
-				slog.Warn("failed to fetch MTLRECT holders", "error", err)
-			} else {
-				i27 = decimal.NewFromInt(int64(mtlCount + mtlrectCount))
+		mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
+
+		mtlIDs, err1 := c.Horizon.FetchAllAssetHolderIDs(ctx, mtlAsset)
+		if err1 != nil {
+			slog.Warn("failed to fetch MTL holder IDs", "error", err1)
+		}
+
+		mtlrectIDs, err2 := c.Horizon.FetchAllAssetHolderIDs(ctx, mtlrectAsset)
+		if err2 != nil {
+			slog.Warn("failed to fetch MTLRECT holder IDs", "error", err2)
+		}
+
+		if err1 == nil || err2 == nil {
+			holderSet := make(map[string]struct{}, len(mtlIDs)+len(mtlrectIDs))
+			for _, id := range mtlIDs {
+				holderSet[id] = struct{}{}
 			}
+			for _, id := range mtlrectIDs {
+				holderSet[id] = struct{}{}
+			}
+			i27 = decimal.NewFromInt(int64(len(holderSet)))
 		}
 	}
 

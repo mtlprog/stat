@@ -12,10 +12,12 @@ import (
 	"github.com/mtlprog/stat/internal/api"
 	"github.com/mtlprog/stat/internal/config"
 	"github.com/mtlprog/stat/internal/database"
+	"github.com/mtlprog/stat/internal/domain"
 	"github.com/mtlprog/stat/internal/external"
 	"github.com/mtlprog/stat/internal/fund"
 	"github.com/mtlprog/stat/internal/horizon"
 	"github.com/mtlprog/stat/internal/indicator"
+	"github.com/mtlprog/stat/internal/metrics"
 	"github.com/mtlprog/stat/internal/portfolio"
 	"github.com/mtlprog/stat/internal/price"
 	"github.com/mtlprog/stat/internal/snapshot"
@@ -62,9 +64,14 @@ func main() {
 	// Fund structure service
 	fundSvc := fund.NewService(portfolioSvc, priceSvc, valuationSvc, externalSvc)
 
-	// Snapshot service
+	// Snapshot service with metrics enrichment
 	snapshotRepo := snapshot.NewPgRepository(pool)
-	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo)
+	var fundAddrs []string
+	for _, a := range domain.AccountRegistry() {
+		fundAddrs = append(fundAddrs, a.Address)
+	}
+	metricsSvc := metrics.NewService(horizonClient, priceSvc, fundAddrs)
+	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo, metricsSvc)
 
 	// Ensure default entity exists
 	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {

@@ -3,6 +3,7 @@ package indicator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -26,13 +27,15 @@ type DividendCalculator struct {
 func (c *DividendCalculator) IDs() []int          { return []int{11, 15, 16, 17, 33, 34, 54, 55} }
 func (c *DividendCalculator) Dependencies() []int { return []int{5, 10} }
 
-func (c *DividendCalculator) Calculate(ctx context.Context, _ domain.FundStructureData, deps map[int]Indicator, hist *HistoricalData) ([]Indicator, error) {
+func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStructureData, deps map[int]Indicator, hist *HistoricalData) ([]Indicator, error) {
 	i5 := deps[5].Value   // Total Shares
 	i10 := deps[10].Value // Share Market Price
 
-	// I11: Monthly Dividends — outgoing EURMTL from MAIN ISSUER to non-fund accounts, last 30 days
+	// I11: Monthly Dividends — prefer stored value from snapshot, fall back to live Horizon
 	i11 := decimal.Zero
-	if c.Horizon != nil {
+	if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {
+		i11 = domain.SafeParse(*data.LiveMetrics.MonthlyDividends)
+	} else if c.Horizon != nil {
 		fundAddresses := lo.Map(domain.AccountRegistry(), func(a domain.FundAccount, _ int) string { return a.Address })
 		amt, err := c.Horizon.FetchMonthlyEURMTLOutflow(ctx, domain.IssuerAddress, fundAddresses)
 		if err != nil {
@@ -48,7 +51,7 @@ func (c *DividendCalculator) Calculate(ctx context.Context, _ domain.FundStructu
 		i15 = i11.Div(i5)
 	}
 
-	// I55: Price Year Ago — scan MTL token price from snapshot 365 days ago
+	// I55: Price Year Ago — use GetNearestBefore to find snapshot closest to 365 days ago
 	i55 := decimal.Zero
 	if hist != nil {
 		i55 = fetchPriceYearAgo(ctx, hist)
@@ -57,17 +60,37 @@ func (c *DividendCalculator) Calculate(ctx context.Context, _ domain.FundStructu
 	// I54: Annual DPS = I15 * 12 (annualized monthly DPS)
 	i54 := i15.Mul(decimal.NewFromInt(12))
 
-	// I16: ADY1 (placeholder — formula not yet defined by client)
+	// Gather 12 months of monthly dividend values for I16 and I33
+	var divs12m []decimal.Decimal
+	if hist != nil {
+		divs12m = fetchMonthlyDividends12m(ctx, hist)
+	}
+
+	// I33: EPS = Median(monthly_divs) * 12 / I5
+	i33 := decimal.Zero
+	if !i5.IsZero() && len(divs12m) > 0 {
+		i33 = Median(divs12m).Mul(decimal.NewFromInt(12)).Div(i5)
+	}
+
+	// I16: ADY1 = (Median(monthly_divs) * 12) / (I5 * I10 * (1 - (I10-I55)/I55)) * 100
 	i16 := decimal.Zero
+	if !i5.IsZero() && !i10.IsZero() && !i55.IsZero() && len(divs12m) > 0 {
+		annualDivs := Median(divs12m).Mul(decimal.NewFromInt(12))
+		deltaP := i10.Sub(i55).Div(i55)
+		factor := decimal.NewFromInt(1).Sub(deltaP)
+		if !factor.IsZero() {
+			denom := i5.Mul(i10).Mul(factor)
+			if !denom.IsZero() {
+				i16 = annualDivs.Div(denom).Mul(decimal.NewFromInt(100))
+			}
+		}
+	}
 
 	// I17: ADY2 = (I54 / I55) * 100
 	i17 := decimal.Zero
 	if !i55.IsZero() {
 		i17 = i54.Div(i55).Mul(decimal.NewFromInt(100))
 	}
-
-	// I33: EPS (placeholder — returns zero, requires median of monthly dividends)
-	i33 := decimal.Zero
 
 	// I34: P/E = I10 / I54
 	i34 := decimal.Zero
@@ -87,13 +110,13 @@ func (c *DividendCalculator) Calculate(ctx context.Context, _ domain.FundStructu
 	}, nil
 }
 
-// fetchPriceYearAgo retrieves the MTL price from the snapshot taken 365 days ago.
-// It scans stored token prices in the snapshot (analogous to findBTCPrice in layer0).
+// fetchPriceYearAgo retrieves the MTL price from the snapshot nearest to 365 days ago.
+// It checks LiveMetrics first, then falls back to scanning stored token prices.
 func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) decimal.Decimal {
-	yearAgo := time.Now().AddDate(-1, 0, 0)
-	snap, err := hist.Repo.GetByDate(ctx, hist.Slug, yearAgo)
+	yearAgo := time.Now().UTC().AddDate(-1, 0, 0)
+	snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, yearAgo)
 	if err != nil {
-		if err != snapshot.ErrNotFound {
+		if !errors.Is(err, snapshot.ErrNotFound) {
 			slog.Warn("failed to fetch historical snapshot for price year ago", "date", yearAgo.Format("2006-01-02"), "error", err)
 		}
 		return decimal.Zero
@@ -105,7 +128,39 @@ func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) decimal.Decima
 		return decimal.Zero
 	}
 
+	if historicalData.LiveMetrics != nil && historicalData.LiveMetrics.MTLMarketPrice != nil {
+		price := domain.SafeParse(*historicalData.LiveMetrics.MTLMarketPrice)
+		if !price.IsZero() {
+			return price
+		}
+	}
 	return findMTLPrice(historicalData)
+}
+
+// fetchMonthlyDividends12m collects stored monthly dividend values from the last 12 months
+// by querying the nearest snapshot for each of the past 12 calendar months.
+func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decimal.Decimal {
+	var divs []decimal.Decimal
+	now := time.Now().UTC()
+	for i := 1; i <= 12; i++ {
+		target := now.AddDate(0, -i, 0)
+		snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, target)
+		if err != nil {
+			continue
+		}
+		var data domain.FundStructureData
+		if err := json.Unmarshal(snap.Data, &data); err != nil {
+			slog.Warn("failed to parse snapshot for monthly dividends", "month", i, "error", err)
+			continue
+		}
+		if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {
+			amt := domain.SafeParse(*data.LiveMetrics.MonthlyDividends)
+			if !amt.IsZero() {
+				divs = append(divs, amt)
+			}
+		}
+	}
+	return divs
 }
 
 // findMTLPrice scans all accounts in the snapshot for a stored MTL token price.

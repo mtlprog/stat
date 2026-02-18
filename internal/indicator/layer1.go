@@ -24,7 +24,6 @@ type HorizonPriceSource interface {
 // CirculationHorizon provides access to Horizon for asset circulation data.
 type CirculationHorizon interface {
 	FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
-	FetchAccountBalance(ctx context.Context, accountID string, asset domain.AssetInfo) (decimal.Decimal, error)
 	FetchAllPoolReservesForAsset(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
 }
 
@@ -39,18 +38,30 @@ func (c *Layer1Calculator) Calculate(ctx context.Context, data domain.FundStruct
 	// I4: Operating Balance = sum of (EURMTL balances + XLM balances converted to EURMTL) across subfond accounts
 	i4 := calculateOperatingBalance(data)
 
-	// I6: MTL in circulation = total supply - issuer balance - AMM pool reserves
-	i6 := fetchCirculation(ctx, c.Circulation, domain.NewAssetInfo("MTL", domain.IssuerAddress))
+	// I6: MTL in circulation — prefer stored value from snapshot, fall back to live Horizon
+	i6 := decimal.Zero
+	if data.LiveMetrics != nil && data.LiveMetrics.MTLCirculation != nil {
+		i6 = domain.SafeParse(*data.LiveMetrics.MTLCirculation)
+	} else {
+		i6 = fetchCirculation(ctx, c.Circulation, domain.NewAssetInfo("MTL", domain.IssuerAddress))
+	}
 
-	// I7: MTLRECT in circulation = total supply - issuer balance - AMM pool reserves
-	i7 := fetchCirculation(ctx, c.Circulation, domain.NewAssetInfo("MTLRECT", domain.IssuerAddress))
+	// I7: MTLRECT in circulation — prefer stored value from snapshot, fall back to live Horizon
+	i7 := decimal.Zero
+	if data.LiveMetrics != nil && data.LiveMetrics.MTLRECTCirculation != nil {
+		i7 = domain.SafeParse(*data.LiveMetrics.MTLRECTCirculation)
+	} else {
+		i7 = fetchCirculation(ctx, c.Circulation, domain.NewAssetInfo("MTLRECT", domain.IssuerAddress))
+	}
 
 	// I5: Total shares = I6 + I7
 	i5 := i6.Add(i7)
 
-	// I10: Share Market Price (MTL bid in EURMTL)
+	// I10: Share Market Price — prefer stored value from snapshot, fall back to live Horizon
 	i10 := decimal.Zero
-	if c.Horizon != nil {
+	if data.LiveMetrics != nil && data.LiveMetrics.MTLMarketPrice != nil {
+		i10 = domain.SafeParse(*data.LiveMetrics.MTLMarketPrice)
+	} else if c.Horizon != nil {
 		mtlAsset := domain.AssetInfo{Code: "MTL", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum4}
 		bid, err := c.Horizon.GetBidPrice(ctx, mtlAsset, domain.EURMTLAsset())
 		if err != nil {
@@ -60,7 +71,7 @@ func (c *Layer1Calculator) Calculate(ctx context.Context, data domain.FundStruct
 		}
 	}
 
-	// I49: MTLRECT Market Price
+	// I49: MTLRECT Market Price (always live — not stored in LiveMetrics)
 	i49 := decimal.Zero
 	if c.Horizon != nil {
 		mtlrectAsset := domain.AssetInfo{Code: "MTLRECT", Issuer: domain.IssuerAddress, Type: domain.AssetTypeCreditAlphanum12}
@@ -84,7 +95,8 @@ func (c *Layer1Calculator) Calculate(ctx context.Context, data domain.FundStruct
 }
 
 // fetchCirculation computes the circulating supply of an asset:
-// total issued - issuer's own balance - AMM pool reserves.
+// total issued - AMM pool reserves.
+// Note: the issuer cannot hold their own tokens in Stellar, so no issuer balance is subtracted.
 func fetchCirculation(ctx context.Context, h CirculationHorizon, asset domain.AssetInfo) decimal.Decimal {
 	if h == nil {
 		return decimal.Zero
@@ -96,19 +108,13 @@ func fetchCirculation(ctx context.Context, h CirculationHorizon, asset domain.As
 		return decimal.Zero
 	}
 
-	issuerBal, err := h.FetchAccountBalance(ctx, domain.IssuerAddress, asset)
-	if err != nil {
-		slog.Warn("failed to fetch issuer asset balance", "asset", asset.Code, "error", err)
-		return decimal.Zero
-	}
-
 	poolReserves, err := h.FetchAllPoolReservesForAsset(ctx, asset)
 	if err != nil {
 		slog.Warn("failed to fetch pool reserves", "asset", asset.Code, "error", err)
 		return decimal.Zero
 	}
 
-	circulation := total.Sub(issuerBal).Sub(poolReserves)
+	circulation := total.Sub(poolReserves)
 	if circulation.IsNegative() {
 		return decimal.Zero
 	}
