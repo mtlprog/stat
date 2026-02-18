@@ -79,6 +79,11 @@ func (s *Service) GetByDate(ctx context.Context, slug string, date time.Time) (*
 	return s.repo.GetByDate(ctx, slug, date)
 }
 
+// GetNearestBefore retrieves the most recent snapshot at or before the given date.
+func (s *Service) GetNearestBefore(ctx context.Context, slug string, date time.Time) (*Snapshot, error) {
+	return s.repo.GetNearestBefore(ctx, slug, date)
+}
+
 // List retrieves recent snapshots.
 func (s *Service) List(ctx context.Context, slug string, limit int) ([]Snapshot, error) {
 	return s.repo.List(ctx, slug, limit)

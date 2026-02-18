@@ -146,6 +146,10 @@ func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decim
 		target := now.AddDate(0, -i, 0)
 		snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, target)
 		if err != nil {
+			if !errors.Is(err, snapshot.ErrNotFound) {
+				slog.Warn("failed to fetch snapshot for monthly dividends",
+					"month", i, "target", target.Format("2006-01"), "error", err)
+			}
 			continue
 		}
 		var data domain.FundStructureData
@@ -154,10 +158,7 @@ func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decim
 			continue
 		}
 		if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {
-			amt := domain.SafeParse(*data.LiveMetrics.MonthlyDividends)
-			if !amt.IsZero() {
-				divs = append(divs, amt)
-			}
+			divs = append(divs, domain.SafeParse(*data.LiveMetrics.MonthlyDividends))
 		}
 	}
 	return divs

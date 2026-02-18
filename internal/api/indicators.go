@@ -101,7 +101,7 @@ func (h *IndicatorHandler) GetIndicators(w http.ResponseWriter, r *http.Request)
 // Returns an empty map if no snapshot is available for that date.
 func (h *IndicatorHandler) fetchHistoricalIndicators(r *http.Request, days int) map[int]indicator.Indicator {
 	historicalDate := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -days)
-	historicalSnap, err := h.snapshots.GetByDate(r.Context(), "mtlf", historicalDate)
+	historicalSnap, err := h.snapshots.GetNearestBefore(r.Context(), "mtlf", historicalDate)
 	if err != nil {
 		if !errors.Is(err, snapshot.ErrNotFound) {
 			slog.Warn("failed to fetch historical snapshot for comparison", "days", days, "error", err)
