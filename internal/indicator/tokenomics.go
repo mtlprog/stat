@@ -54,7 +54,7 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 			slog.Warn("failed to fetch MTLRECT holder IDs", "error", err2)
 		}
 
-		if err1 == nil || err2 == nil {
+		if err1 == nil && err2 == nil {
 			holderSet := make(map[string]struct{}, len(mtlIDs)+len(mtlrectIDs))
 			for _, id := range mtlIDs {
 				holderSet[id] = struct{}{}

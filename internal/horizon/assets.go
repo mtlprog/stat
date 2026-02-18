@@ -3,6 +3,7 @@ package horizon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 
 	"github.com/shopspring/decimal"
@@ -93,6 +94,8 @@ func (c *Client) FetchAllAssetHolderIDs(ctx context.Context, asset domain.AssetI
 
 		u, err := url.Parse(resp.Links.Next.Href)
 		if err != nil {
+			slog.Warn("failed to parse Horizon pagination link, results may be incomplete",
+				"href", resp.Links.Next.Href, "error", err)
 			break
 		}
 		path = u.Path + "?" + u.RawQuery
