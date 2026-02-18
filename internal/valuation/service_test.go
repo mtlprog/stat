@@ -1,9 +1,13 @@
 package valuation
 
 import (
+	"context"
+	"encoding/base64"
+	"errors"
 	"testing"
 
 	"github.com/mtlprog/stat/internal/domain"
+	"github.com/mtlprog/stat/internal/horizon"
 )
 
 func TestLookupValuationNFTPrefersCost(t *testing.T) {
@@ -97,5 +101,45 @@ func TestLookupValuationNotFound(t *testing.T) {
 	result := LookupValuation("TOKEN", "100", "GOWNER", valuations)
 	if result != nil {
 		t.Error("expected nil for non-matching token")
+	}
+}
+
+type failingAccountFetcher struct{}
+
+func (f *failingAccountFetcher) FetchAccount(_ context.Context, _ string) (horizon.HorizonAccount, error) {
+	return horizon.HorizonAccount{}, errors.New("horizon unavailable")
+}
+
+func TestFetchAllValuationsAllFail(t *testing.T) {
+	svc := NewService(&failingAccountFetcher{})
+	_, err := svc.FetchAllValuations(context.Background())
+	if err == nil {
+		t.Error("expected error when all account scans fail, got nil")
+	}
+}
+
+type partialFailFetcher struct{ successID string }
+
+func (f *partialFailFetcher) FetchAccount(_ context.Context, accountID string) (horizon.HorizonAccount, error) {
+	if accountID == f.successID {
+		return horizon.HorizonAccount{
+			ID: accountID,
+			Data: map[string]string{
+				"TOKEN_1COST": base64.StdEncoding.EncodeToString([]byte("100")),
+			},
+		}, nil
+	}
+	return horizon.HorizonAccount{}, errors.New("horizon unavailable")
+}
+
+func TestFetchAllValuationsPartialFailure(t *testing.T) {
+	firstAccount := domain.AccountRegistry()[0].Address
+	svc := NewService(&partialFailFetcher{successID: firstAccount})
+	valuations, err := svc.FetchAllValuations(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error on partial failure, got: %v", err)
+	}
+	if len(valuations) == 0 {
+		t.Error("expected at least one valuation from the successful account")
 	}
 }

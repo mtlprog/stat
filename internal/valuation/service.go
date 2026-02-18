@@ -56,6 +56,9 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 
 	if len(errs) > 0 {
 		slog.Warn("some valuation scans failed", "errorCount", len(errs), "successCount", len(allValuations))
+		if len(allValuations) == 0 {
+			return nil, fmt.Errorf("all %d valuation scans failed", len(errs))
+		}
 	}
 
 	return deduplicateValuations(allValuations), nil

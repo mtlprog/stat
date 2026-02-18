@@ -290,6 +290,55 @@ func TestGetBidPriceFetchError(t *testing.T) {
 	}
 }
 
+type assetAwareMockHorizon struct {
+	successDest  string
+	paths        []horizon.HorizonPathRecord
+	orderbookErr error
+	poolsErr     error
+}
+
+func (m *assetAwareMockHorizon) FetchStrictSendPaths(_ context.Context, _ domain.AssetInfo, _ string, dest domain.AssetInfo) ([]horizon.HorizonPathRecord, error) {
+	if dest.Code == m.successDest {
+		return m.paths, nil
+	}
+	return nil, errors.New("no path to " + dest.Code)
+}
+
+func (m *assetAwareMockHorizon) FetchStrictReceivePaths(_ context.Context, _ domain.AssetInfo, _ domain.AssetInfo, _ string) ([]horizon.HorizonPathRecord, error) {
+	return nil, errors.New("no receive paths")
+}
+
+func (m *assetAwareMockHorizon) FetchOrderbook(_ context.Context, _, _ domain.AssetInfo, _ int) (horizon.HorizonOrderbook, error) {
+	return horizon.HorizonOrderbook{}, m.orderbookErr
+}
+
+func (m *assetAwareMockHorizon) FetchLiquidityPools(_ context.Context, _, _ domain.AssetInfo) ([]horizon.HorizonLiquidityPool, error) {
+	return nil, m.poolsErr
+}
+
+func TestGetTokenPricesCrossRateFromXLM(t *testing.T) {
+	// XLM path succeeds; EURMTL path fails.
+	// Cross-rate EURMTL→XLM also succeeds via same mock.
+	// Derived PriceEURMTL = PriceXLM / crossRate.
+	mock := &assetAwareMockHorizon{
+		successDest:  "XLM",
+		paths:        []horizon.HorizonPathRecord{{SourceAmount: "1", DestinationAmount: "4.0"}},
+		orderbookErr: errors.New("no orderbook"),
+		poolsErr:     errors.New("no pools"),
+	}
+	svc := NewService(mock)
+	result, err := svc.GetTokenPrices(context.Background(), testAsset(), "100")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.PriceXLM == "" {
+		t.Error("expected non-empty XLM price")
+	}
+	if result.PriceEURMTL == "" {
+		t.Error("expected non-empty EURMTL price derived via cross-rate")
+	}
+}
+
 func testAsset() domain.AssetInfo {
 	return domain.AssetInfo{
 		Code:   "MTL",

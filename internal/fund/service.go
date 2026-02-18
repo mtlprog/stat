@@ -114,7 +114,7 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 		token, err := s.priceToken(ctx, tb, acc.Address, accountValuations)
 		if err != nil {
 			w := fmt.Sprintf("failed to price %s on %s: %v", tb.Asset.Code, acc.Name, err)
-			slog.Warn(w)
+			slog.Warn("failed to price token", "asset", tb.Asset.Code, "account", acc.Name, "error", err)
 			warnings = append(warnings, w)
 			tokens = append(tokens, domain.TokenPriceWithBalance{
 				Asset:   tb.Asset,

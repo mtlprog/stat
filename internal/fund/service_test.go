@@ -13,9 +13,13 @@ import (
 
 type mockPortfolio struct {
 	portfolios map[string]domain.AccountPortfolio
+	err        error
 }
 
 func (m *mockPortfolio) FetchPortfolio(_ context.Context, accountID string) (domain.AccountPortfolio, error) {
+	if m.err != nil {
+		return domain.AccountPortfolio{}, m.err
+	}
 	if p, ok := m.portfolios[accountID]; ok {
 		return p, nil
 	}
@@ -39,10 +43,11 @@ func (m *mockPrice) GetTokenPrices(_ context.Context, _ domain.AssetInfo, _ stri
 
 type mockValuation struct {
 	valuations []domain.AssetValuation
+	err        error
 }
 
 func (m *mockValuation) FetchAllValuations(_ context.Context) ([]domain.AssetValuation, error) {
-	return m.valuations, nil
+	return m.valuations, m.err
 }
 
 type mockExternal struct {
@@ -222,6 +227,32 @@ func TestNewServiceNilExternalPanics(t *testing.T) {
 		}
 	}()
 	NewService(&mockPortfolio{}, &mockPrice{}, &mockValuation{}, nil)
+}
+
+func TestGetFundStructureValuationError(t *testing.T) {
+	svc := NewService(
+		&mockPortfolio{},
+		&mockPrice{},
+		&mockValuation{err: errors.New("horizon down")},
+		&mockExternal{},
+	)
+	_, err := svc.GetFundStructure(context.Background())
+	if err == nil {
+		t.Error("expected error when FetchAllValuations fails")
+	}
+}
+
+func TestGetFundStructurePortfolioError(t *testing.T) {
+	svc := NewService(
+		&mockPortfolio{err: errors.New("account not found")},
+		&mockPrice{},
+		&mockValuation{},
+		&mockExternal{},
+	)
+	_, err := svc.GetFundStructure(context.Background())
+	if err == nil {
+		t.Error("expected error when FetchPortfolio fails")
+	}
 }
 
 func TestPartitionAccounts(t *testing.T) {
