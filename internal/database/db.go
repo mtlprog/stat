@@ -26,7 +26,35 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 }
 
 // RunMigrations applies all .up.sql migration files from the given filesystem.
+// Already-applied migrations are tracked in schema_migrations and skipped on subsequent runs.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
+	_, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			filename   TEXT        PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`)
+	if err != nil {
+		return fmt.Errorf("creating schema_migrations table: %w", err)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT filename FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("reading applied migrations: %w", err)
+	}
+	applied := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning migration name: %w", err)
+		}
+		applied[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating applied migrations: %w", err)
+	}
+
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return fmt.Errorf("reading migrations directory: %w", err)
@@ -41,13 +69,19 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
 	sort.Strings(upFiles)
 
 	for _, file := range upFiles {
+		if applied[file] {
+			continue
+		}
 		sql, err := fs.ReadFile(fsys, file)
 		if err != nil {
 			return fmt.Errorf("reading migration %s: %w", file, err)
 		}
-
 		if _, err := pool.Exec(ctx, string(sql)); err != nil {
 			return fmt.Errorf("executing migration %s: %w", file, err)
+		}
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO schema_migrations (filename) VALUES ($1)`, file); err != nil {
+			return fmt.Errorf("recording migration %s: %w", file, err)
 		}
 	}
 

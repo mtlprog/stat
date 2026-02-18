@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mtlprog/stat/internal/indicator"
 	"github.com/mtlprog/stat/internal/snapshot"
@@ -32,8 +33,11 @@ func NewServer(port string, snapshots *snapshot.Service, indicators *indicator.S
 	}
 
 	return &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+		Addr:         ":" + port,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 }
 

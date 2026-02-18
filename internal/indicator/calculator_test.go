@@ -256,3 +256,30 @@ func TestRegistryDuplicateIDPanics(t *testing.T) {
 	registry.Register(&Layer0Calculator{})
 	registry.Register(&Layer0Calculator{}) // duplicate IDs
 }
+
+type cyclicCalcA struct{}
+
+func (c *cyclicCalcA) IDs() []int          { return []int{9901} }
+func (c *cyclicCalcA) Dependencies() []int { return []int{9902} }
+func (c *cyclicCalcA) Calculate(_ context.Context, _ domain.FundStructureData, _ map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
+	return nil, nil
+}
+
+type cyclicCalcB struct{}
+
+func (c *cyclicCalcB) IDs() []int          { return []int{9902} }
+func (c *cyclicCalcB) Dependencies() []int { return []int{9901} }
+func (c *cyclicCalcB) Calculate(_ context.Context, _ domain.FundStructureData, _ map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
+	return nil, nil
+}
+
+func TestRegistryDependencyCycleDetected(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&cyclicCalcA{})
+	registry.Register(&cyclicCalcB{})
+
+	_, err := registry.CalculateAll(context.Background(), domain.FundStructureData{}, nil)
+	if err == nil {
+		t.Error("expected error for dependency cycle, got nil")
+	}
+}

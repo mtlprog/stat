@@ -2,12 +2,17 @@ package external
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
+
+// ErrQuoteNotFound is returned when no quote exists for the requested symbol.
+var ErrQuoteNotFound = errors.New("quote not found")
 
 // Quote represents an external price quote stored in the database.
 type Quote struct {
@@ -51,6 +56,9 @@ func (r *PgQuoteRepository) GetQuote(ctx context.Context, symbol string) (Quote,
 		`SELECT symbol, price_in_eur, updated_at FROM external_quotes WHERE symbol = $1`,
 		symbol).Scan(&q.Symbol, &q.PriceInEUR, &q.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Quote{}, ErrQuoteNotFound
+		}
 		return Quote{}, fmt.Errorf("getting quote for %s: %w", symbol, err)
 	}
 	return q, nil

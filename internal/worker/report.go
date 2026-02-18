@@ -27,12 +27,18 @@ func NewReportWorker(generator SnapshotGenerator, interval time.Duration) *Repor
 	}
 }
 
+// utcDate returns the current date normalized to midnight UTC.
+func utcDate() time.Time {
+	now := time.Now().UTC()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // Run starts the report worker loop. It blocks until the context is cancelled.
 func (w *ReportWorker) Run(ctx context.Context) {
 	slog.Info("ReportWorker: starting")
 
 	// Generate immediately on startup
-	if _, err := w.generator.Generate(ctx, "mtlf", time.Now()); err != nil {
+	if _, err := w.generator.Generate(ctx, "mtlf", utcDate()); err != nil {
 		slog.Error("ReportWorker: initial generation failed", "error", err)
 	} else {
 		slog.Info("ReportWorker: initial generation completed")
@@ -47,7 +53,7 @@ func (w *ReportWorker) Run(ctx context.Context) {
 			slog.Info("ReportWorker: shutting down")
 			return
 		case <-ticker.C:
-			if _, err := w.generator.Generate(ctx, "mtlf", time.Now()); err != nil {
+			if _, err := w.generator.Generate(ctx, "mtlf", utcDate()); err != nil {
 				slog.Error("ReportWorker: generation failed", "error", err)
 			} else {
 				slog.Info("ReportWorker: generation completed")
