@@ -32,13 +32,30 @@ type HorizonAssetsResponse struct {
 	} `json:"_embedded"`
 }
 
+// HorizonAssetAccounts holds per-authorization-level account counts for an asset.
+type HorizonAssetAccounts struct {
+	Authorized                      int `json:"authorized"`
+	AuthorizedToMaintainLiabilities int `json:"authorized_to_maintain_liabilities"`
+	Unauthorized                    int `json:"unauthorized"`
+}
+
+// HorizonAssetBalances holds per-authorization-level balance totals for an asset.
+type HorizonAssetBalances struct {
+	Authorized                      string `json:"authorized"`
+	AuthorizedToMaintainLiabilities string `json:"authorized_to_maintain_liabilities"`
+	Unauthorized                    string `json:"unauthorized"`
+}
+
 // HorizonAsset represents an asset from the Horizon /assets endpoint.
 type HorizonAsset struct {
-	AssetType   string `json:"asset_type"`
-	AssetCode   string `json:"asset_code"`
-	AssetIssuer string `json:"asset_issuer"`
-	NumAccounts int    `json:"num_accounts"`
-	Amount      string `json:"amount"`
+	AssetType                string               `json:"asset_type"`
+	AssetCode                string               `json:"asset_code"`
+	AssetIssuer              string               `json:"asset_issuer"`
+	Accounts                 HorizonAssetAccounts `json:"accounts"`
+	Balances                 HorizonAssetBalances `json:"balances"`
+	ClaimableBalancesAmount  string               `json:"claimable_balances_amount"`
+	LiquidityPoolsAmount     string               `json:"liquidity_pools_amount"`
+	ContractsAmount          string               `json:"contracts_amount"`
 }
 
 // FetchAssetHolders returns the number of accounts holding the given asset.
@@ -61,7 +78,7 @@ func (c *Client) FetchAssetHolders(ctx context.Context, asset domain.AssetInfo) 
 		return 0, nil
 	}
 
-	return resp.Embedded.Records[0].NumAccounts, nil
+	return resp.Embedded.Records[0].Accounts.Authorized, nil
 }
 
 // FetchAllAssetHolderIDs returns the account IDs of all accounts holding the given asset.
@@ -123,9 +140,24 @@ func (c *Client) FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (
 		return decimal.Zero, nil
 	}
 
-	amt, err := decimal.NewFromString(resp.Embedded.Records[0].Amount)
-	if err != nil {
-		return decimal.Zero, fmt.Errorf("parsing amount for %s: %w", asset.Code, err)
+	rec := resp.Embedded.Records[0]
+	total := decimal.Zero
+	for _, s := range []string{
+		rec.Balances.Authorized,
+		rec.Balances.AuthorizedToMaintainLiabilities,
+		rec.Balances.Unauthorized,
+		rec.ClaimableBalancesAmount,
+		rec.LiquidityPoolsAmount,
+		rec.ContractsAmount,
+	} {
+		if s == "" {
+			continue
+		}
+		v, err := decimal.NewFromString(s)
+		if err != nil {
+			return decimal.Zero, fmt.Errorf("parsing amount for %s: %w", asset.Code, err)
+		}
+		total = total.Add(v)
 	}
-	return amt, nil
+	return total, nil
 }
