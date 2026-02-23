@@ -1,5 +1,9 @@
 # Binary
 stat
+stat_bin
+
+# Secrets — use .env.example as template
+.env
 
 # IDE
 .idea/
