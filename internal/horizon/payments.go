@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -12,30 +13,36 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
-type horizonPayment struct {
-	Type        string `json:"type"`
-	To          string `json:"to"`
-	From        string `json:"from"`
-	AssetCode   string `json:"asset_code"`
-	AssetIssuer string `json:"asset_issuer"`
-	Amount      string `json:"amount"`
-	CreatedAt   string `json:"created_at"`
+type horizonTransaction struct {
+	Memo     string `json:"memo"`
+	MemoType string `json:"memo_type"`
 }
 
-type horizonPaymentsResponse struct {
+type horizonOperation struct {
+	Type        string              `json:"type"`
+	To          string              `json:"to"`
+	From        string              `json:"from"`
+	AssetCode   string              `json:"asset_code"`
+	AssetIssuer string              `json:"asset_issuer"`
+	Amount      string              `json:"amount"`
+	CreatedAt   string              `json:"created_at"`
+	Transaction *horizonTransaction `json:"transaction"`
+}
+
+type horizonOperationsResponse struct {
 	Links struct {
 		Next struct {
 			Href string `json:"href"`
 		} `json:"next"`
 	} `json:"_links"`
 	Embedded struct {
-		Records []horizonPayment `json:"records"`
+		Records []horizonOperation `json:"records"`
 	} `json:"_embedded"`
 }
 
-// FetchMonthlyEURMTLOutflow returns the total EURMTL paid from accountID to non-fund addresses
-// in the last 30 days. It paginates through all results, stopping when payments fall outside
-// the 30-day window (since results are ordered descending by time).
+// FetchMonthlyEURMTLOutflow returns the total EURMTL paid from accountID to non-fund
+// addresses in the last 30 days, counting only operations whose transaction memo starts
+// with "div" (case-insensitive). Accepts payment and path_payment operation types.
 func (c *Client) FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error) {
 	since := time.Now().AddDate(0, 0, -30)
 	eurmtl := domain.EURMTLAsset()
@@ -46,18 +53,17 @@ func (c *Client) FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string
 	}
 
 	total := decimal.Zero
-	path := fmt.Sprintf("/accounts/%s/payments?order=desc&limit=200", accountID)
+	path := fmt.Sprintf("/accounts/%s/operations?join=transactions&order=desc&limit=200", accountID)
 
 	for path != "" {
-		var resp horizonPaymentsResponse
+		var resp horizonOperationsResponse
 		if err := c.getJSON(ctx, path, &resp); err != nil {
-			return decimal.Zero, fmt.Errorf("fetching payments for %s: %w", accountID, err)
+			return decimal.Zero, fmt.Errorf("fetching operations for %s: %w", accountID, err)
 		}
 
 		done := false
-		for _, p := range resp.Embedded.Records {
-			// Check timestamp first — records are ordered desc, so once we're past 30 days we can stop.
-			t, err := time.Parse(time.RFC3339, p.CreatedAt)
+		for _, op := range resp.Embedded.Records {
+			t, err := time.Parse(time.RFC3339, op.CreatedAt)
 			if err != nil {
 				continue
 			}
@@ -66,20 +72,29 @@ func (c *Client) FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string
 				break
 			}
 
-			if p.Type != "payment" {
+			if op.Type != "payment" && op.Type != "path_payment_strict_send" && op.Type != "path_payment_strict_receive" {
 				continue
 			}
-			if p.From != accountID {
+			if op.From != accountID {
 				continue
 			}
-			if p.AssetCode != eurmtl.Code || p.AssetIssuer != eurmtl.Issuer {
+			if op.AssetCode != eurmtl.Code || op.AssetIssuer != eurmtl.Issuer {
 				continue
 			}
-			if fundSet[p.To] {
+			if fundSet[op.To] {
 				continue
 			}
 
-			amt, err := decimal.NewFromString(p.Amount)
+			// Only count operations whose transaction memo starts with "div"
+			if op.Transaction == nil {
+				continue
+			}
+			memo := strings.TrimSpace(strings.ToLower(op.Transaction.Memo))
+			if !strings.Contains(memo, "div") {
+				continue
+			}
+
+			amt, err := decimal.NewFromString(op.Amount)
 			if err != nil {
 				continue
 			}

@@ -65,13 +65,19 @@ func (s *Service) EnrichMetrics(ctx context.Context, data *domain.FundStructureD
 		m.MTLRECTCirculation = &v
 	}
 
-	// I11: Monthly dividends (outgoing EURMTL from issuer to non-fund accounts, last 30 days)
-	if divs, err := s.horizon.FetchMonthlyEURMTLOutflow(ctx, domain.IssuerAddress, s.fundAddrs); err != nil {
-		slog.Warn("metrics: failed to fetch monthly dividends", "error", err)
-	} else {
-		v := divs.String()
-		m.MonthlyDividends = &v
+	// I11: Monthly dividends — sum EURMTL outflows with "div" memo across all fund accounts.
+	// Dividends may be paid from MFB, APART, or other fund accounts, not just the issuer.
+	totalDivs := decimal.Zero
+	for _, addr := range s.fundAddrs {
+		d, err := s.horizon.FetchMonthlyEURMTLOutflow(ctx, addr, s.fundAddrs)
+		if err != nil {
+			slog.Warn("metrics: failed to fetch dividends from account", "account", addr, "error", err)
+			continue
+		}
+		totalDivs = totalDivs.Add(d)
 	}
+	v := totalDivs.String()
+	m.MonthlyDividends = &v
 
 	data.LiveMetrics = m
 	return nil
