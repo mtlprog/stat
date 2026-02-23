@@ -35,8 +35,12 @@ func NewSheetsWriter(ctx context.Context, spreadsheetID, credentialsJSON string)
 	return &SheetsWriter{spreadsheetID: spreadsheetID, svc: svc}, nil
 }
 
-// Write clears and rewrites the IND_ALL and IND_MAIN sheets.
+// Write ensures required sheets exist, then clears and rewrites them.
 func (w *SheetsWriter) Write(ctx context.Context, rows []IndicatorRow) error {
+	if err := w.ensureSheets(ctx, "IND_ALL", "IND_MAIN"); err != nil {
+		return err
+	}
+
 	indAllValues := buildIndAll(rows)
 	indMainValues := buildIndMain(rows)
 
@@ -119,6 +123,44 @@ func buildIndMain(rows []IndicatorRow) [][]any {
 	}
 
 	return data
+}
+
+// ensureSheets creates any of the named sheets that do not already exist.
+func (w *SheetsWriter) ensureSheets(ctx context.Context, names ...string) error {
+	spreadsheet, err := w.svc.Spreadsheets.Get(w.spreadsheetID).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("getting spreadsheet metadata: %w", err)
+	}
+
+	existing := make(map[string]bool, len(spreadsheet.Sheets))
+	for _, s := range spreadsheet.Sheets {
+		existing[s.Properties.Title] = true
+	}
+
+	var requests []*sheets.Request
+	for _, name := range names {
+		if !existing[name] {
+			requests = append(requests, &sheets.Request{
+				AddSheet: &sheets.AddSheetRequest{
+					Properties: &sheets.SheetProperties{Title: name},
+				},
+			})
+		}
+	}
+
+	if len(requests) == 0 {
+		return nil
+	}
+
+	_, err = w.svc.Spreadsheets.BatchUpdate(
+		w.spreadsheetID,
+		&sheets.BatchUpdateSpreadsheetRequest{Requests: requests},
+	).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("creating sheets: %w", err)
+	}
+
+	return nil
 }
 
 func toFloat(d decimal.Decimal) float64 {
