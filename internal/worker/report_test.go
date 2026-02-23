@@ -20,7 +20,7 @@ func (m *mockSnapshotGenerator) Generate(_ context.Context, _ string, _ time.Tim
 
 func TestReportWorkerRunsAndShutdown(t *testing.T) {
 	mock := &mockSnapshotGenerator{}
-	w := NewReportWorker(mock, 50*time.Millisecond)
+	w := NewReportWorker(mock, 50*time.Millisecond, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
