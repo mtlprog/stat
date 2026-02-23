@@ -14,10 +14,10 @@ type TokenomicsCalculator struct {
 	Horizon TokenomicsHorizon
 }
 
-// TokenomicsHorizon provides access to Horizon for asset holder counts and IDs.
+// TokenomicsHorizon provides access to Horizon for balance-filtered holder counts and IDs.
 type TokenomicsHorizon interface {
-	FetchAssetHolders(ctx context.Context, asset domain.AssetInfo) (int, error)
-	FetchAllAssetHolderIDs(ctx context.Context, asset domain.AssetInfo) ([]string, error)
+	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
+	FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) ([]string, error)
 }
 
 func (c *TokenomicsCalculator) IDs() []int          { return []int{18, 21, 22, 23, 24, 25, 26, 27, 40} }
@@ -27,10 +27,13 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	i1 := deps[1].Value // Market Cap
 	i5 := deps[5].Value // Total Shares
 
-	// I24: EURMTL holder count
+	minNonZero := decimal.NewFromFloat(0.0000001) // any non-zero balance
+	minOne := decimal.NewFromInt(1)               // balance >= 1
+
+	// I24: EURMTL holder count (accounts with any non-zero balance)
 	i24 := decimal.Zero
 	if c.Horizon != nil {
-		count, err := c.Horizon.FetchAssetHolders(ctx, domain.EURMTLAsset())
+		count, err := c.Horizon.FetchAssetHolderCountByBalance(ctx, domain.EURMTLAsset(), minNonZero)
 		if err != nil {
 			slog.Warn("failed to fetch asset holders", "asset", "EURMTL", "error", err)
 		} else {
@@ -44,12 +47,12 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 		mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
 		mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
 
-		mtlIDs, err1 := c.Horizon.FetchAllAssetHolderIDs(ctx, mtlAsset)
+		mtlIDs, err1 := c.Horizon.FetchAssetHolderIDsByBalance(ctx, mtlAsset, minOne)
 		if err1 != nil {
 			slog.Warn("failed to fetch MTL holder IDs", "error", err1)
 		}
 
-		mtlrectIDs, err2 := c.Horizon.FetchAllAssetHolderIDs(ctx, mtlrectAsset)
+		mtlrectIDs, err2 := c.Horizon.FetchAssetHolderIDsByBalance(ctx, mtlrectAsset, minOne)
 		if err2 != nil {
 			slog.Warn("failed to fetch MTLRECT holder IDs", "error", err2)
 		}
@@ -90,10 +93,10 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	// I26: EURMTL payment total 30d (placeholder - returns zero, requires payment history)
 	i26 := decimal.Zero
 
-	// I40: MTLAP holder count
+	// I40: MTLAP holder count (accounts with balance >= 1)
 	i40 := decimal.Zero
 	if c.Horizon != nil {
-		count, err := c.Horizon.FetchAssetHolders(ctx, domain.MTLAPAsset())
+		count, err := c.Horizon.FetchAssetHolderCountByBalance(ctx, domain.MTLAPAsset(), minOne)
 		if err != nil {
 			slog.Warn("failed to fetch asset holders", "asset", "MTLAP", "error", err)
 		} else {

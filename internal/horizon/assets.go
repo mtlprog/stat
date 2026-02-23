@@ -11,6 +11,20 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
+// horizonAccountBalance represents a single balance line on a Stellar account.
+type horizonAccountBalance struct {
+	Balance     string `json:"balance"`
+	AssetType   string `json:"asset_type"`
+	AssetCode   string `json:"asset_code"`
+	AssetIssuer string `json:"asset_issuer"`
+}
+
+// horizonAccountRecord represents a single account from the Horizon /accounts endpoint.
+type horizonAccountRecord struct {
+	AccountID string                  `json:"account_id"`
+	Balances  []horizonAccountBalance `json:"balances"`
+}
+
 // horizonAccountsResponse wraps the embedded records for account queries.
 type horizonAccountsResponse struct {
 	Links struct {
@@ -19,9 +33,7 @@ type horizonAccountsResponse struct {
 		} `json:"next"`
 	} `json:"_links"`
 	Embedded struct {
-		Records []struct {
-			AccountID string `json:"account_id"`
-		} `json:"records"`
+		Records []horizonAccountRecord `json:"records"`
 	} `json:"_embedded"`
 }
 
@@ -58,51 +70,40 @@ type HorizonAsset struct {
 	ContractsAmount          string               `json:"contracts_amount"`
 }
 
-// FetchAssetHolders returns the number of accounts holding the given asset.
-func (c *Client) FetchAssetHolders(ctx context.Context, asset domain.AssetInfo) (int, error) {
-	if asset.IsNative() {
-		return 0, fmt.Errorf("cannot query holders for native asset")
+// accountBalanceForAsset returns the balance of the specified asset on an account,
+// or -1 if the asset is not found in the account's balances.
+func accountBalanceForAsset(rec horizonAccountRecord, asset domain.AssetInfo) (decimal.Decimal, bool) {
+	for _, b := range rec.Balances {
+		if b.AssetCode == asset.Code && b.AssetIssuer == asset.Issuer {
+			v, err := decimal.NewFromString(b.Balance)
+			if err != nil {
+				return decimal.Zero, false
+			}
+			return v, true
+		}
 	}
-
-	params := url.Values{}
-	params.Set("asset_code", asset.Code)
-	params.Set("asset_issuer", asset.Issuer)
-	params.Set("limit", "1")
-
-	var resp HorizonAssetsResponse
-	if err := c.getJSON(ctx, "/assets?"+params.Encode(), &resp); err != nil {
-		return 0, fmt.Errorf("fetching asset holders for %s: %w", asset.Code, err)
-	}
-
-	if len(resp.Embedded.Records) == 0 {
-		return 0, nil
-	}
-
-	return resp.Embedded.Records[0].Accounts.Authorized, nil
+	return decimal.Zero, false
 }
 
-// FetchAllAssetHolderIDs returns the account IDs of all accounts holding the given asset.
-// It paginates through all results using Horizon's cursor-based pagination.
-func (c *Client) FetchAllAssetHolderIDs(ctx context.Context, asset domain.AssetInfo) ([]string, error) {
-	if asset.IsNative() {
-		return nil, fmt.Errorf("cannot query holders for native asset")
-	}
-
+// paginateAccounts iterates through all accounts holding the given asset,
+// calling fn for each account record. Pagination stops when fn returns false.
+func (c *Client) paginateAccounts(ctx context.Context, asset domain.AssetInfo, fn func(horizonAccountRecord) bool) error {
 	assetFilter := asset.Code + ":" + asset.Issuer
 	path := "/accounts?" + url.Values{
 		"asset": []string{assetFilter},
 		"limit": []string{"200"},
 	}.Encode()
 
-	var ids []string
 	for path != "" {
 		var resp horizonAccountsResponse
 		if err := c.getJSON(ctx, path, &resp); err != nil {
-			return nil, fmt.Errorf("fetching holder IDs for %s: %w", asset.Code, err)
+			return fmt.Errorf("fetching accounts for %s: %w", asset.Code, err)
 		}
 
 		for _, record := range resp.Embedded.Records {
-			ids = append(ids, record.AccountID)
+			if !fn(record) {
+				return nil
+			}
 		}
 
 		if len(resp.Embedded.Records) == 0 || resp.Links.Next.Href == "" {
@@ -117,7 +118,42 @@ func (c *Client) FetchAllAssetHolderIDs(ctx context.Context, asset domain.AssetI
 		}
 		path = u.Path + "?" + u.RawQuery
 	}
-	return ids, nil
+	return nil
+}
+
+// FetchAssetHolderCountByBalance returns the number of accounts whose balance
+// of the given asset is >= minBalance. It paginates through the Horizon
+// /accounts endpoint and inspects each account's balance lines.
+func (c *Client) FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error) {
+	if asset.IsNative() {
+		return 0, fmt.Errorf("cannot query holders for native asset")
+	}
+
+	var count int
+	err := c.paginateAccounts(ctx, asset, func(rec horizonAccountRecord) bool {
+		if bal, ok := accountBalanceForAsset(rec, asset); ok && bal.GreaterThanOrEqual(minBalance) {
+			count++
+		}
+		return true
+	})
+	return count, err
+}
+
+// FetchAssetHolderIDsByBalance returns the account IDs of all accounts whose
+// balance of the given asset is >= minBalance.
+func (c *Client) FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) ([]string, error) {
+	if asset.IsNative() {
+		return nil, fmt.Errorf("cannot query holders for native asset")
+	}
+
+	var ids []string
+	err := c.paginateAccounts(ctx, asset, func(rec horizonAccountRecord) bool {
+		if bal, ok := accountBalanceForAsset(rec, asset); ok && bal.GreaterThanOrEqual(minBalance) {
+			ids = append(ids, rec.AccountID)
+		}
+		return true
+	})
+	return ids, err
 }
 
 // FetchAssetAmount returns the total issued amount of the given asset.

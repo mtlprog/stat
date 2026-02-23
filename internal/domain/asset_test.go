@@ -79,6 +79,19 @@ func TestEURMTLAssetFields(t *testing.T) {
 	}
 }
 
+func TestMTLAPAssetFields(t *testing.T) {
+	a := MTLAPAsset()
+	if a.Code != "MTLAP" {
+		t.Errorf("MTLAPAsset().Code = %q, want MTLAP", a.Code)
+	}
+	if a.Issuer != MTLAPAddress {
+		t.Error("MTLAPAsset().Issuer mismatch")
+	}
+	if a.Type != AssetTypeCreditAlphanum12 {
+		t.Errorf("MTLAPAsset().Type = %q, want credit_alphanum12 (MTLAP is 5 chars)", a.Type)
+	}
+}
+
 func TestXLMAssetFields(t *testing.T) {
 	a := XLMAsset()
 	if a.Code != "XLM" {

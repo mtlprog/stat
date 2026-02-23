@@ -105,14 +105,14 @@ type mockTokenomicsHorizon struct {
 	holders map[string]int
 }
 
-func (m *mockTokenomicsHorizon) FetchAssetHolders(_ context.Context, asset domain.AssetInfo) (int, error) {
+func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
 	if count, ok := m.holders[asset.Code]; ok {
 		return count, nil
 	}
 	return 0, nil
 }
 
-func (m *mockTokenomicsHorizon) FetchAllAssetHolderIDs(_ context.Context, _ domain.AssetInfo) ([]string, error) {
+func (m *mockTokenomicsHorizon) FetchAssetHolderIDsByBalance(_ context.Context, _ domain.AssetInfo, _ decimal.Decimal) ([]string, error) {
 	return nil, nil
 }
 
