@@ -132,9 +132,6 @@ func runReport(c *cli.Context) error {
 		return fmt.Errorf("ensuring entity: %w", err)
 	}
 
-	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
-	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
-
 	now := time.Now().UTC()
 	date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
@@ -145,17 +142,18 @@ func runReport(c *cli.Context) error {
 	slog.Info("snapshot generated successfully", "date", date.Format("2006-01-02"))
 
 	if cfg.GoogleSheetsSpreadsheetID != "" && cfg.GoogleCredentialsJSON != "" {
+		hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+		indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+
 		sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
 		if err != nil {
-			slog.Warn("Google Sheets export skipped: credentials error", "error", err)
-		} else {
-			exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
-			if err := exportSvc.Export(ctx, data); err != nil {
-				slog.Error("Google Sheets export failed", "error", err)
-			} else {
-				slog.Info("Google Sheets export completed")
-			}
+			return fmt.Errorf("initializing Google Sheets writer: %w", err)
 		}
+		exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
+		if err := exportSvc.Export(ctx, data); err != nil {
+			return fmt.Errorf("exporting to Google Sheets: %w", err)
+		}
+		slog.Info("Google Sheets export completed")
 	}
 
 	return nil
@@ -207,23 +205,28 @@ func runServe(c *cli.Context) error {
 
 	srv := api.NewServer(cfg.HTTPPort, snapshotSvc, indicatorSvc)
 
+	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("HTTP server listening on :%s", cfg.HTTPPort)
+		slog.Info("HTTP server listening", "port", cfg.HTTPPort)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
+			serverErr <- err
 		}
 	}()
 
-	<-ctx.Done()
-	log.Println("Shutting down...")
+	select {
+	case err := <-serverErr:
+		return fmt.Errorf("HTTP server: %w", err)
+	case <-ctx.Done():
+		slog.Info("shutting down")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
+		slog.Error("HTTP server shutdown error", "error", err)
 	}
 
-	log.Println("Shutdown complete")
+	slog.Info("shutdown complete")
 	return nil
 }
