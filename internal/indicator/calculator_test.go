@@ -102,7 +102,8 @@ func TestAnalyticsCalculatorZeroPriceYearAgo(t *testing.T) {
 }
 
 type mockTokenomicsHorizon struct {
-	holders map[string]int
+	holders    map[string]int
+	holderIDs  map[string][]string
 }
 
 func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
@@ -112,7 +113,10 @@ func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context
 	return 0, nil
 }
 
-func (m *mockTokenomicsHorizon) FetchAssetHolderIDsByBalance(_ context.Context, _ domain.AssetInfo, _ decimal.Decimal) ([]string, error) {
+func (m *mockTokenomicsHorizon) FetchAssetHolderIDsByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) ([]string, error) {
+	if ids, ok := m.holderIDs[asset.Code]; ok {
+		return ids, nil
+	}
 	return nil, nil
 }
 
@@ -122,6 +126,10 @@ func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 			holders: map[string]int{
 				"EURMTL": 150,
 				"MTLAP":  42,
+			},
+			holderIDs: map[string][]string{
+				"MTL":     {"A", "B", "C"},
+				"MTLRECT": {"B", "C", "D"},
 			},
 		},
 	}
@@ -144,6 +152,18 @@ func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 	// I24: EURMTL holders
 	if !indicatorMap[24].Value.Equal(decimal.NewFromInt(150)) {
 		t.Errorf("I24 = %s, want 150", indicatorMap[24].Value)
+	}
+	// I27: union of MTL(A,B,C) + MTLRECT(B,C,D) = 4 unique holders
+	if !indicatorMap[27].Value.Equal(decimal.NewFromInt(4)) {
+		t.Errorf("I27 = %s, want 4 (union of MTL+MTLRECT holders)", indicatorMap[27].Value)
+	}
+	// I21: Average Shareholding = I5 / I27 = 10000 / 4 = 2500
+	if !indicatorMap[21].Value.Equal(decimal.NewFromInt(2500)) {
+		t.Errorf("I21 = %s, want 2500", indicatorMap[21].Value)
+	}
+	// I22: Average Value per Shareholder = I1 / I27 = 85000 / 4 = 21250
+	if !indicatorMap[22].Value.Equal(decimal.NewFromInt(21250)) {
+		t.Errorf("I22 = %s, want 21250", indicatorMap[22].Value)
 	}
 	// I40: MTLAP holders
 	if !indicatorMap[40].Value.Equal(decimal.NewFromInt(42)) {
