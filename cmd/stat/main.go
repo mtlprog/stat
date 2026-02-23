@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/urfave/cli/v2"
 
 	"github.com/mtlprog/stat/internal/api"
 	"github.com/mtlprog/stat/internal/config"
@@ -23,7 +27,6 @@ import (
 	"github.com/mtlprog/stat/internal/price"
 	"github.com/mtlprog/stat/internal/snapshot"
 	"github.com/mtlprog/stat/internal/valuation"
-	"github.com/mtlprog/stat/internal/worker"
 	"github.com/mtlprog/stat/migrations"
 )
 
@@ -31,41 +34,92 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	app := &cli.App{
+		Name:  "stat",
+		Usage: "Montelibero Fund statistics",
+		Commands: []*cli.Command{
+			{
+				Name:   "serve",
+				Usage:  "Start HTTP API server",
+				Action: runServe,
+			},
+			{
+				Name:   "quote",
+				Usage:  "Fetch and store external price quotes",
+				Action: runQuote,
+			},
+			{
+				Name:   "report",
+				Usage:  "Generate fund snapshot and export to Sheets",
+				Action: runReport,
+			},
+		},
+	}
+
+	if err := app.RunContext(ctx, os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func runQuote(c *cli.Context) error {
+	ctx := c.Context
 	cfg := config.Load()
 
-	// Connect to database
 	if cfg.DatabaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		return fmt.Errorf("DATABASE_URL is required")
 	}
 
 	pool, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		return fmt.Errorf("connecting to database: %w", err)
 	}
 	defer pool.Close()
 
-	// Run migrations
 	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Create Horizon client
-	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
-
-	// Create services
-	portfolioSvc := portfolio.NewService(horizonClient)
-	priceSvc := price.NewService(horizonClient)
-	valuationSvc := valuation.NewService(horizonClient)
-
-	// External price service
 	coingecko := external.NewCoinGeckoClient(cfg.CoinGeckoURL, cfg.CoinGeckoDelay, cfg.CoinGeckoRetryMax)
 	quoteRepo := external.NewPgQuoteRepository(pool)
 	externalSvc := external.NewService(coingecko, quoteRepo)
 
-	// Fund structure service
+	if err := externalSvc.FetchAndStoreQuotes(ctx); err != nil {
+		return fmt.Errorf("fetching quotes: %w", err)
+	}
+
+	slog.Info("quotes fetched successfully")
+	return nil
+}
+
+func runReport(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
+	portfolioSvc := portfolio.NewService(horizonClient)
+	priceSvc := price.NewService(horizonClient)
+	valuationSvc := valuation.NewService(horizonClient)
+
+	coingecko := external.NewCoinGeckoClient(cfg.CoinGeckoURL, cfg.CoinGeckoDelay, cfg.CoinGeckoRetryMax)
+	quoteRepo := external.NewPgQuoteRepository(pool)
+	externalSvc := external.NewService(coingecko, quoteRepo)
+
 	fundSvc := fund.NewService(portfolioSvc, priceSvc, valuationSvc, externalSvc)
 
-	// Snapshot service with metrics enrichment
 	snapshotRepo := snapshot.NewPgRepository(pool)
 	var fundAddrs []string
 	for _, a := range domain.AccountRegistry() {
@@ -74,52 +128,92 @@ func main() {
 	metricsSvc := metrics.NewService(horizonClient, priceSvc, fundAddrs)
 	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo, metricsSvc)
 
-	// Ensure default entity exists
 	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {
-		log.Fatalf("Failed to ensure entity: %v", err)
+		return fmt.Errorf("ensuring entity: %w", err)
 	}
 
-	// Wire indicator service
-	hist := &indicator.HistoricalData{
-		Repo: snapshotRepo,
-		Slug: "mtlf",
-	}
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
 	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
 
-	// Start workers
-	quoteWorker := worker.NewQuoteWorker(externalSvc, cfg.QuoteWorkerInterval)
-	go quoteWorker.Run(ctx)
+	now := time.Now().UTC()
+	date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
-	var exportHook worker.AfterSnapshotHook
+	data, err := snapshotSvc.Generate(ctx, "mtlf", date)
+	if err != nil {
+		return fmt.Errorf("generating snapshot: %w", err)
+	}
+	slog.Info("snapshot generated successfully", "date", date.Format("2006-01-02"))
+
 	if cfg.GoogleSheetsSpreadsheetID != "" && cfg.GoogleCredentialsJSON != "" {
 		sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
 		if err != nil {
-			slog.Warn("Google Sheets export disabled: credentials error", "error", err)
+			slog.Warn("Google Sheets export skipped: credentials error", "error", err)
 		} else {
-			exportHook = export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
-			slog.Info("Google Sheets export enabled", "spreadsheet_id", cfg.GoogleSheetsSpreadsheetID)
+			exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
+			if err := exportSvc.Export(ctx, data); err != nil {
+				slog.Error("Google Sheets export failed", "error", err)
+			} else {
+				slog.Info("Google Sheets export completed")
+			}
 		}
 	}
 
-	reportWorker := worker.NewReportWorker(snapshotSvc, cfg.ReportWorkerInterval, exportHook)
-	go reportWorker.Run(ctx)
+	return nil
+}
 
-	if cfg.AdminAPIKey == "" {
-		slog.Warn("ADMIN_API_KEY not set, generate endpoint is unprotected")
+func runServe(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
 	}
 
-	// Start HTTP server
-	srv := api.NewServer(cfg.HTTPPort, snapshotSvc, indicatorSvc, cfg.AdminAPIKey)
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
+	portfolioSvc := portfolio.NewService(horizonClient)
+	priceSvc := price.NewService(horizonClient)
+	valuationSvc := valuation.NewService(horizonClient)
+
+	coingecko := external.NewCoinGeckoClient(cfg.CoinGeckoURL, cfg.CoinGeckoDelay, cfg.CoinGeckoRetryMax)
+	quoteRepo := external.NewPgQuoteRepository(pool)
+	externalSvc := external.NewService(coingecko, quoteRepo)
+
+	fundSvc := fund.NewService(portfolioSvc, priceSvc, valuationSvc, externalSvc)
+
+	snapshotRepo := snapshot.NewPgRepository(pool)
+	var fundAddrs []string
+	for _, a := range domain.AccountRegistry() {
+		fundAddrs = append(fundAddrs, a.Address)
+	}
+	metricsSvc := metrics.NewService(horizonClient, priceSvc, fundAddrs)
+	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo, metricsSvc)
+
+	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {
+		return fmt.Errorf("ensuring entity: %w", err)
+	}
+
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+
+	srv := api.NewServer(cfg.HTTPPort, snapshotSvc, indicatorSvc)
 
 	go func() {
 		log.Printf("HTTP server listening on :%s", cfg.HTTPPort)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)
-			stop()
 		}
 	}()
 
-	// Wait for shutdown signal
 	<-ctx.Done()
 	log.Println("Shutting down...")
 
@@ -131,4 +225,5 @@ func main() {
 	}
 
 	log.Println("Shutdown complete")
+	return nil
 }
