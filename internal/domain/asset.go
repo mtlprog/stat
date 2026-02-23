@@ -71,7 +71,7 @@ var (
 	mtlapAsset = AssetInfo{
 		Code:   "MTLAP",
 		Issuer: MTLAPAddress,
-		Type:   AssetTypeCreditAlphanum4,
+		Type:   AssetTypeCreditAlphanum12,
 	}
 )
 
