@@ -1,0 +1,7 @@
+.git
+.env
+*.xlsx
+stat
+stat_bin
+stat_bin_linux
+.playwright-mcp/
