@@ -13,6 +13,7 @@ import (
 	"github.com/mtlprog/stat/internal/config"
 	"github.com/mtlprog/stat/internal/database"
 	"github.com/mtlprog/stat/internal/domain"
+	"github.com/mtlprog/stat/internal/export"
 	"github.com/mtlprog/stat/internal/external"
 	"github.com/mtlprog/stat/internal/fund"
 	"github.com/mtlprog/stat/internal/horizon"
@@ -78,20 +79,30 @@ func main() {
 		log.Fatalf("Failed to ensure entity: %v", err)
 	}
 
-	// Start workers
-	quoteWorker := worker.NewQuoteWorker(externalSvc, cfg.QuoteWorkerInterval)
-	go quoteWorker.Run(ctx)
-
-	reportWorker := worker.NewReportWorker(snapshotSvc, cfg.ReportWorkerInterval)
-	go reportWorker.Run(ctx)
-
-	// Wire historical data for time-series indicators (I55, etc.)
+	// Wire indicator service
 	hist := &indicator.HistoricalData{
 		Repo: snapshotRepo,
 		Slug: "mtlf",
 	}
-
 	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+
+	// Start workers
+	quoteWorker := worker.NewQuoteWorker(externalSvc, cfg.QuoteWorkerInterval)
+	go quoteWorker.Run(ctx)
+
+	var exportHook worker.AfterSnapshotHook
+	if cfg.GoogleSheetsSpreadsheetID != "" && cfg.GoogleCredentialsJSON != "" {
+		sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
+		if err != nil {
+			slog.Warn("Google Sheets export disabled: credentials error", "error", err)
+		} else {
+			exportHook = export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
+			slog.Info("Google Sheets export enabled", "spreadsheet_id", cfg.GoogleSheetsSpreadsheetID)
+		}
+	}
+
+	reportWorker := worker.NewReportWorker(snapshotSvc, cfg.ReportWorkerInterval, exportHook)
+	go reportWorker.Run(ctx)
 
 	if cfg.AdminAPIKey == "" {
 		slog.Warn("ADMIN_API_KEY not set, generate endpoint is unprotected")

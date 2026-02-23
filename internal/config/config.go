@@ -20,6 +20,8 @@ type Config struct {
 	ReportWorkerInterval  time.Duration
 	HTTPPort              string
 	AdminAPIKey           string
+	GoogleSheetsSpreadsheetID string
+	GoogleCredentialsJSON     string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -35,7 +37,9 @@ func Load() Config {
 		QuoteWorkerInterval:  envOrDefaultDuration("QUOTE_WORKER_INTERVAL", 1*time.Hour),
 		ReportWorkerInterval:  envOrDefaultDuration("REPORT_WORKER_INTERVAL", 24*time.Hour),
 		HTTPPort:              envOrDefault("HTTP_PORT", "8080"),
-		AdminAPIKey:           os.Getenv("ADMIN_API_KEY"),
+		AdminAPIKey:               os.Getenv("ADMIN_API_KEY"),
+		GoogleSheetsSpreadsheetID: os.Getenv("GOOGLE_SHEETS_SPREADSHEET_ID"),
+		GoogleCredentialsJSON:     os.Getenv("GOOGLE_CREDENTIALS_JSON"),
 	}
 }
 

@@ -13,17 +13,36 @@ type SnapshotGenerator interface {
 	Generate(ctx context.Context, slug string, date time.Time) (domain.FundStructureData, error)
 }
 
+// AfterSnapshotHook is called after each successful snapshot generation.
+type AfterSnapshotHook interface {
+	Export(ctx context.Context, data domain.FundStructureData) error
+}
+
 // ReportWorker periodically generates fund snapshots.
 type ReportWorker struct {
 	generator SnapshotGenerator
 	interval  time.Duration
+	hook      AfterSnapshotHook // optional
 }
 
-// NewReportWorker creates a new ReportWorker.
-func NewReportWorker(generator SnapshotGenerator, interval time.Duration) *ReportWorker {
+// NewReportWorker creates a new ReportWorker with an optional post-generation hook.
+func NewReportWorker(generator SnapshotGenerator, interval time.Duration, hook AfterSnapshotHook) *ReportWorker {
 	return &ReportWorker{
 		generator: generator,
 		interval:  interval,
+		hook:      hook,
+	}
+}
+
+// runHook calls the post-generation hook if one is configured.
+func (w *ReportWorker) runHook(ctx context.Context, data domain.FundStructureData) {
+	if w.hook == nil {
+		return
+	}
+	if err := w.hook.Export(ctx, data); err != nil {
+		slog.Error("ReportWorker: export hook failed", "error", err)
+	} else {
+		slog.Info("ReportWorker: export hook completed")
 	}
 }
 
@@ -38,10 +57,11 @@ func (w *ReportWorker) Run(ctx context.Context) {
 	slog.Info("ReportWorker: starting")
 
 	// Generate immediately on startup
-	if _, err := w.generator.Generate(ctx, "mtlf", utcDate()); err != nil {
+	if data, err := w.generator.Generate(ctx, "mtlf", utcDate()); err != nil {
 		slog.Error("ReportWorker: initial generation failed", "error", err)
 	} else {
 		slog.Info("ReportWorker: initial generation completed")
+		w.runHook(ctx, data)
 	}
 
 	ticker := time.NewTicker(w.interval)
@@ -53,10 +73,11 @@ func (w *ReportWorker) Run(ctx context.Context) {
 			slog.Info("ReportWorker: shutting down")
 			return
 		case <-ticker.C:
-			if _, err := w.generator.Generate(ctx, "mtlf", utcDate()); err != nil {
+			if data, err := w.generator.Generate(ctx, "mtlf", utcDate()); err != nil {
 				slog.Error("ReportWorker: generation failed", "error", err)
 			} else {
 				slog.Info("ReportWorker: generation completed")
+				w.runHook(ctx, data)
 			}
 		}
 	}
