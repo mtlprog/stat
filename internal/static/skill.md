@@ -1,6 +1,6 @@
 # MTLF Stat API
 
-MTLF Stat tracks the financial health of the [Montelibero Fund](https://montelibero.org) (Stellar blockchain). Base URL: `https://stat.mtlprog.xyz`. All endpoints return JSON; only snapshot generation requires authentication.
+MTLF Stat tracks the financial health of the [Montelibero Fund](https://montelibero.org) (Stellar blockchain). Base URL: `https://stat.mtlprog.xyz`. All endpoints return JSON. The API is read-only.
 
 ---
 
@@ -11,8 +11,6 @@ MTLF Stat tracks the financial health of the [Montelibero Fund](https://montelib
 **GET /api/v1/snapshots/{date}** — snapshot for a specific date (`YYYY-MM-DD`, midnight UTC).
 
 **GET /api/v1/snapshots?limit=N** — list of snapshots, newest first. Default limit 30, max 365.
-
-**POST /api/v1/snapshots/generate** — triggers a fresh snapshot. Requires `Authorization: Bearer <ADMIN_API_KEY>`. Returns the generated `FundStructureData`.
 
 ### Snapshot shape
 
@@ -97,4 +95,4 @@ Indicators are computed on-the-fly from a snapshot.
 
 ## Error responses
 
-HTTP status codes: `400` bad request, `401` unauthorized, `404` not found, `500` internal error.
+HTTP status codes: `400` bad request, `404` not found, `500` internal error.

@@ -10,3 +10,4 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/stat .
 ENTRYPOINT ["./stat"]
+CMD ["serve"]
