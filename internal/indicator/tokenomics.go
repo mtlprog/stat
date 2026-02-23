@@ -93,8 +93,7 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	// I40: MTLAP holder count
 	i40 := decimal.Zero
 	if c.Horizon != nil {
-		mtlapAsset := domain.NewAssetInfo("MTLAP", domain.IssuerAddress)
-		count, err := c.Horizon.FetchAssetHolders(ctx, mtlapAsset)
+		count, err := c.Horizon.FetchAssetHolders(ctx, domain.MTLAPAsset())
 		if err != nil {
 			slog.Warn("failed to fetch asset holders", "asset", "MTLAP", "error", err)
 		} else {
