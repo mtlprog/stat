@@ -55,7 +55,6 @@ func NewService(indicators *indicator.Service, snapshots snapshot.Repository, wr
 }
 
 // Export calculates all indicators with historical changes and writes to the sheet.
-// Implements worker.AfterSnapshotHook.
 func (s *Service) Export(ctx context.Context, data domain.FundStructureData) error {
 	current, err := s.indicators.CalculateAll(ctx, data)
 	if err != nil {

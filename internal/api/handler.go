@@ -77,17 +77,6 @@ func (h *Handler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snapshots)
 }
 
-// GenerateSnapshot handles POST /api/v1/snapshots/generate.
-func (h *Handler) GenerateSnapshot(w http.ResponseWriter, r *http.Request) {
-	data, err := h.snapshots.Generate(r.Context(), "mtlf", time.Now())
-	if err != nil {
-		slog.Error("failed to generate snapshot", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to generate snapshot")
-		return
-	}
-	writeJSON(w, http.StatusOK, data)
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {

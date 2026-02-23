@@ -1,4 +1,4 @@
-.PHONY: build test fmt vet lint clean up down logs generate
+.PHONY: build test fmt vet lint clean up down logs
 
 # Build
 build:
@@ -30,7 +30,3 @@ down:
 
 logs:
 	docker compose logs -f app
-
-# Trigger snapshot generation (requires running server)
-generate:
-	curl -s -X POST http://localhost:$${HTTP_PORT:-8080}/api/v1/snapshots/generate | jq .

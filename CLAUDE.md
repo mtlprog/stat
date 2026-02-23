@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build the binary
-go build -o stat ./...
+go build -o stat ./cmd/stat
 
 # Run tests
 go test ./...
@@ -15,6 +15,16 @@ go test ./...
 go fmt ./...
 go vet ./...
 ```
+
+## Deployment Model (Railway)
+
+The binary uses `github.com/urfave/cli/v2` with three subcommands — Railway manages scheduling externally:
+- `stat serve` — long-running HTTP API server (read-only: snapshots + indicators)
+- `stat quote` — one-shot cron: fetch CoinGecko prices and store in DB (run hourly)
+- `stat report` — one-shot cron: generate snapshot + export to Google Sheets (run daily)
+
+The API has **no write endpoints** — snapshot generation only happens via `stat report`.
+There is no `internal/worker` package; all scheduling is external.
 
 ## Architecture
 
@@ -27,7 +37,7 @@ go vet ./...
 ### Snapshot Data Model
 - `fund_snapshots.data` (JSONB) stores `domain.FundStructureData` with per-account token balances and prices.
 - Token prices captured at snapshot time live in `FundAccountPortfolio.Tokens[].PriceInEURMTL` — use these for historical price lookups (see `findBTCPrice` in `layer0.go` as a pattern).
-- `snapshot.Repository.GetByDate` requires exact date match (midnight UTC); snapshots are stored by the `ReportWorker` using `time.Date(..., time.UTC)`.
+- `snapshot.Repository.GetByDate` requires exact date match (midnight UTC); snapshots are stored by `stat report` using `time.Date(..., time.UTC)`.
 
 ### Key Domain Constants
 - `domain.IssuerAddress` — main fund issuer Stellar address
