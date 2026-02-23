@@ -27,10 +27,10 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 	i1 := deps[1].Value // Market Cap
 	i5 := deps[5].Value // Total Shares
 
-	minNonZero := decimal.NewFromFloat(0.0000001) // any non-zero balance
-	minOne := decimal.NewFromInt(1)               // balance >= 1
+	minNonZero := decimal.New(1, -7) // 0.0000001 = 1 stroop, smallest non-zero Stellar balance
+	minOne := decimal.NewFromInt(1)  // balance >= 1
 
-	// I24: EURMTL holder count (accounts with any non-zero balance)
+	// I24: EURMTL holder count (accounts with balance >= 1 stroop)
 	i24 := decimal.Zero
 	if c.Horizon != nil {
 		count, err := c.Horizon.FetchAssetHolderCountByBalance(ctx, domain.EURMTLAsset(), minNonZero)
@@ -57,7 +57,10 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, _ domain.FundStruc
 			slog.Warn("failed to fetch MTLRECT holder IDs", "error", err2)
 		}
 
-		if err1 == nil && err2 == nil {
+		if err1 != nil || err2 != nil {
+			slog.Warn("I27/I21/I22 will be zero due to failed Horizon calls",
+				"mtl_error", err1, "mtlrect_error", err2)
+		} else {
 			holderSet := make(map[string]struct{}, len(mtlIDs)+len(mtlrectIDs))
 			for _, id := range mtlIDs {
 				holderSet[id] = struct{}{}

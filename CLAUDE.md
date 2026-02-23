@@ -34,6 +34,11 @@ go vet ./...
 - `domain.EURMTLAsset()` — fund base asset (EUR-pegged stablecoin)
 - `domain.AccountRegistry()` — all 11 fund accounts (used to exclude fund addresses from external payment filtering)
 
+### Stellar Precision
+- Stellar uses 7 decimal places (stroops). Smallest non-zero balance: `0.0000001`.
+- Use `decimal.New(1, -7)` for exact stroop thresholds — avoid `decimal.NewFromFloat` for precision-sensitive values.
+- Asset type is determined by code length: `<=4` chars → `credit_alphanum4`, `5-12` chars → `credit_alphanum12`. Use `domain.AssetTypeFromCode()`.
+
 ## Horizon API Patterns
 
 ### Service Wiring
@@ -45,11 +50,21 @@ go vet ./...
 ```go
 // Extract next-page path from Horizon's _links.next.href:
 u, err := url.Parse(resp.Links.Next.Href)
-if err != nil { break }
+if err != nil { return fmt.Errorf("parsing pagination link: %w", err) }
 path = u.Path + "?" + u.RawQuery
 ```
 - Add `Links.Next.Href` field to response structs when pagination is needed.
 - When paginating payments ordered desc by time, **check the timestamp before type/direction filters** so non-payment records don't block early termination.
+
+### Testing Horizon Methods
+- Use `httptest.NewServer` + `NewClient(server.URL, 1, 10*time.Millisecond)` for HTTP-level tests (see `assets_test.go`, `account_test.go`).
+- For pagination tests, use a `page` counter in the handler to return different responses per request.
+- Calculator tests use mock interfaces (e.g., `mockTokenomicsHorizon`) — always test that mocks exercise the real logic (e.g., union dedup for I27).
+
+### Error Handling
+- Horizon pagination errors must be returned, not swallowed — silent `break` on parse failure hides incomplete data.
+- Balance parse errors in helpers should `slog.Warn` before returning zero — distinguish "not found" from "corrupt data".
+- When one failed API call cascades to zero out multiple indicators, log the cascade explicitly (which indicators are affected and why).
 
 ## Git Conventions
 

@@ -70,13 +70,17 @@ type HorizonAsset struct {
 	ContractsAmount          string               `json:"contracts_amount"`
 }
 
-// accountBalanceForAsset returns the balance of the specified asset on an account,
-// or -1 if the asset is not found in the account's balances.
+// accountBalanceForAsset returns the balance of the specified asset on an
+// account. The boolean indicates whether the asset was found; if false, the
+// returned decimal is zero.
 func accountBalanceForAsset(rec horizonAccountRecord, asset domain.AssetInfo) (decimal.Decimal, bool) {
 	for _, b := range rec.Balances {
 		if b.AssetCode == asset.Code && b.AssetIssuer == asset.Issuer {
 			v, err := decimal.NewFromString(b.Balance)
 			if err != nil {
+				slog.Warn("failed to parse account balance, skipping",
+					"account", rec.AccountID, "asset", asset.Code,
+					"balance", b.Balance, "error", err)
 				return decimal.Zero, false
 			}
 			return v, true
@@ -86,7 +90,8 @@ func accountBalanceForAsset(rec horizonAccountRecord, asset domain.AssetInfo) (d
 }
 
 // paginateAccounts iterates through all accounts holding the given asset,
-// calling fn for each account record. Pagination stops when fn returns false.
+// calling fn for each account record. Pagination stops when fn returns false,
+// when there are no more pages, or on error.
 func (c *Client) paginateAccounts(ctx context.Context, asset domain.AssetInfo, fn func(horizonAccountRecord) bool) error {
 	assetFilter := asset.Code + ":" + asset.Issuer
 	path := "/accounts?" + url.Values{
@@ -112,9 +117,7 @@ func (c *Client) paginateAccounts(ctx context.Context, asset domain.AssetInfo, f
 
 		u, err := url.Parse(resp.Links.Next.Href)
 		if err != nil {
-			slog.Warn("failed to parse Horizon pagination link, results may be incomplete",
-				"href", resp.Links.Next.Href, "error", err)
-			break
+			return fmt.Errorf("parsing Horizon pagination link %q: %w", resp.Links.Next.Href, err)
 		}
 		path = u.Path + "?" + u.RawQuery
 	}
