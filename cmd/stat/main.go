@@ -150,10 +150,16 @@ func runReport(c *cli.Context) error {
 			return fmt.Errorf("initializing Google Sheets writer: %w", err)
 		}
 		exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
-		if err := exportSvc.Export(ctx, data); err != nil {
+		rows, err := exportSvc.Export(ctx, data)
+		if err != nil {
 			return fmt.Errorf("exporting to Google Sheets: %w", err)
 		}
-		slog.Info("Google Sheets export completed")
+		slog.Info("Google Sheets IND_ALL/IND_MAIN export completed")
+
+		if err := sheetsWriter.AppendMonitoring(ctx, rows); err != nil {
+			return fmt.Errorf("appending MONITORING row: %w", err)
+		}
+		slog.Info("Google Sheets MONITORING row appended")
 	}
 
 	return nil
