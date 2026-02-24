@@ -200,80 +200,152 @@ func (w *SheetsWriter) ensureSheets(ctx context.Context, names ...string) (map[s
 }
 
 // applyFormatting applies visual formatting to both sheets via a single BatchUpdate.
+// Styling matches the original MTL_report_1.xlsx layout.
 func (w *SheetsWriter) applyFormatting(ctx context.Context, indAll, indMain sheetMeta, allCount, mainCount int) error {
-	navyBlue := &sheets.Color{Red: 0.122, Green: 0.220, Blue: 0.392}
-	white := &sheets.Color{Red: 1, Green: 1, Blue: 1}
-	lightBlue := &sheets.Color{Red: 0.898, Green: 0.929, Blue: 0.992}
+	lightGreen := &sheets.Color{Red: 0.851, Green: 0.918, Blue: 0.827} // #D9EAD3
+	lightYellow := &sheets.Color{Red: 1.0, Green: 0.898, Blue: 0.6}   // #FFE599
+	lightGray := &sheets.Color{Red: 0.851, Green: 0.851, Blue: 0.851} // #D9D9D9
 
 	var reqs []*sheets.Request
 
 	// ---- IND_ALL ----
+	allEnd := int64(allCount + 1)
 
-	// Header row (row 0): navy background, bold white text
+	// Header row: light green background, bold Arial 10pt, centered
 	reqs = append(reqs, cellFormatReq(indAll.id, 0, 1, 0, 12,
 		&sheets.CellFormat{
-			BackgroundColor: navyBlue,
-			TextFormat:      &sheets.TextFormat{Bold: true, ForegroundColor: white},
+			BackgroundColor:     lightGreen,
+			TextFormat:          &sheets.TextFormat{Bold: true, FontSize: 10, FontFamily: "Arial"},
+			HorizontalAlignment: "CENTER",
 		},
-		"userEnteredFormat(backgroundColor,textFormat)"))
+		"userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"))
 
-	// Freeze header row
-	reqs = append(reqs, freezeRowsReq(indAll.id, 1))
+	// MAIN column L (col 11) header: gray background
+	reqs = append(reqs, cellFormatReq(indAll.id, 0, 1, 11, 12,
+		&sheets.CellFormat{BackgroundColor: lightGray},
+		"userEnteredFormat.backgroundColor"))
 
-	// Value column D (col 3): number format
-	reqs = append(reqs, cellFormatReq(indAll.id, 1, int64(allCount+1), 3, 4,
-		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0.00"}},
-		"userEnteredFormat.numberFormat"))
+	// Freeze 1 row + 12 columns (pane at M2)
+	reqs = append(reqs, freezePaneReq(indAll.id, 1, 12))
 
-	// Change columns F–I (cols 5–8): percent format
-	reqs = append(reqs, cellFormatReq(indAll.id, 1, int64(allCount+1), 5, 9,
+	// Value column D (col 3): #,##0, bold
+	reqs = append(reqs, cellFormatReq(indAll.id, 1, allEnd, 3, 4,
+		&sheets.CellFormat{
+			NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0"},
+			TextFormat:   &sheets.TextFormat{Bold: true},
+		},
+		"userEnteredFormat(numberFormat,textFormat)"))
+
+	// Code column C (col 2) and measure column E (col 4): centered
+	reqs = append(reqs, cellFormatReq(indAll.id, 1, allEnd, 2, 3,
+		&sheets.CellFormat{HorizontalAlignment: "CENTER"},
+		"userEnteredFormat.horizontalAlignment"))
+	reqs = append(reqs, cellFormatReq(indAll.id, 1, allEnd, 4, 5,
+		&sheets.CellFormat{HorizontalAlignment: "CENTER"},
+		"userEnteredFormat.horizontalAlignment"))
+
+	// Change columns F–I (cols 5–8): 0.00%
+	reqs = append(reqs, cellFormatReq(indAll.id, 1, allEnd, 5, 9,
 		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "PERCENT", Pattern: "0.00%"}},
 		"userEnteredFormat.numberFormat"))
 
-	// Delete existing bandings, then add fresh banded rows
+	// Thin border: left on column F (col 5), right on column I (col 8)
+	reqs = append(reqs, cellFormatReq(indAll.id, 0, allEnd, 5, 6,
+		&sheets.CellFormat{
+			Borders: &sheets.Borders{Left: &sheets.Border{Style: "SOLID", Color: &sheets.Color{}}},
+		},
+		"userEnteredFormat.borders.left"))
+	reqs = append(reqs, cellFormatReq(indAll.id, 0, allEnd, 8, 9,
+		&sheets.CellFormat{
+			Borders: &sheets.Borders{Right: &sheets.Border{Style: "SOLID", Color: &sheets.Color{}}},
+		},
+		"userEnteredFormat.borders.right"))
+
+	// Delete existing bandings (original has no banding)
 	for _, bid := range indAll.bandingIDs {
 		reqs = append(reqs, &sheets.Request{
 			DeleteBanding: &sheets.DeleteBandingRequest{BandedRangeId: bid},
 		})
 	}
-	reqs = append(reqs, bandingReq(indAll.id, 1, 0, 12, white, lightBlue))
 
-	// Autosize all columns
-	reqs = append(reqs, autosizeColsReq(indAll.id, 0, 12))
+	// Column widths (pixels, converted from Excel character units × 8)
+	for col, px := range map[int64]int64{
+		0: 26, 1: 178, 2: 112, 3: 72, 4: 62, 5: 68, 6: 56, 7: 41, 8: 60, 9: 268, 10: 119, 11: 51,
+	} {
+		reqs = append(reqs, colWidthReq(indAll.id, col, px))
+	}
 
 	// ---- IND_MAIN ----
+	mainEnd := int64(mainCount + 2)
 
-	// Header row (row 1, after the date row): navy background, bold white text
-	reqs = append(reqs, cellFormatReq(indMain.id, 1, 2, 0, 7,
+	// Date row (row 0) + header row (row 1): light yellow, bold, v=center
+	reqs = append(reqs, cellFormatReq(indMain.id, 0, 2, 0, 7,
 		&sheets.CellFormat{
-			BackgroundColor: navyBlue,
-			TextFormat:      &sheets.TextFormat{Bold: true, ForegroundColor: white},
+			BackgroundColor:   lightYellow,
+			TextFormat:        &sheets.TextFormat{Bold: true, FontFamily: "Arial"},
+			VerticalAlignment: "MIDDLE",
 		},
-		"userEnteredFormat(backgroundColor,textFormat)"))
+		"userEnteredFormat(backgroundColor,textFormat,verticalAlignment)"))
 
-	// Freeze date + header rows
-	reqs = append(reqs, freezeRowsReq(indMain.id, 2))
+	// Date + header alignment: cols A–B right-aligned, cols C–G centered
+	reqs = append(reqs, cellFormatReq(indMain.id, 0, 2, 0, 2,
+		&sheets.CellFormat{HorizontalAlignment: "RIGHT"},
+		"userEnteredFormat.horizontalAlignment"))
+	reqs = append(reqs, cellFormatReq(indMain.id, 0, 2, 2, 7,
+		&sheets.CellFormat{HorizontalAlignment: "CENTER"},
+		"userEnteredFormat.horizontalAlignment"))
 
-	// Value column B (col 1): number format
-	reqs = append(reqs, cellFormatReq(indMain.id, 2, int64(mainCount+2), 1, 2,
-		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0.00"}},
-		"userEnteredFormat.numberFormat"))
+	// Freeze 2 rows + 3 columns (pane at D3)
+	reqs = append(reqs, freezePaneReq(indMain.id, 2, 3))
 
-	// Change columns D–G (cols 3–6): percent format
-	reqs = append(reqs, cellFormatReq(indMain.id, 2, int64(mainCount+2), 3, 7,
+	// Data column A (col 0): right-aligned, v=center
+	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 0, 1,
+		&sheets.CellFormat{
+			HorizontalAlignment: "RIGHT",
+			VerticalAlignment:   "MIDDLE",
+		},
+		"userEnteredFormat(horizontalAlignment,verticalAlignment)"))
+
+	// Data column B (col 1): font 12pt bold, v=center, #,##0.00
+	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 1, 2,
+		&sheets.CellFormat{
+			TextFormat:        &sheets.TextFormat{Bold: true, FontSize: 12},
+			VerticalAlignment: "MIDDLE",
+			NumberFormat:      &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0.00"},
+		},
+		"userEnteredFormat(textFormat,verticalAlignment,numberFormat)"))
+
+	// Data column C (col 2): centered, v=center
+	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 2, 3,
+		&sheets.CellFormat{
+			HorizontalAlignment: "CENTER",
+			VerticalAlignment:   "MIDDLE",
+		},
+		"userEnteredFormat(horizontalAlignment,verticalAlignment)"))
+
+	// Data columns D–E (cols 3–4): 0.00%
+	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 3, 5,
 		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "PERCENT", Pattern: "0.00%"}},
 		"userEnteredFormat.numberFormat"))
 
-	// Delete existing bandings, then add fresh banded rows
+	// Data columns F–G (cols 5–6): 0%
+	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 5, 7,
+		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "PERCENT", Pattern: "0%"}},
+		"userEnteredFormat.numberFormat"))
+
+	// Delete existing bandings (original has no banding)
 	for _, bid := range indMain.bandingIDs {
 		reqs = append(reqs, &sheets.Request{
 			DeleteBanding: &sheets.DeleteBandingRequest{BandedRangeId: bid},
 		})
 	}
-	reqs = append(reqs, bandingReq(indMain.id, 2, 0, 7, white, lightBlue))
 
-	// Autosize all columns
-	reqs = append(reqs, autosizeColsReq(indMain.id, 0, 7))
+	// Column widths
+	for col, px := range map[int64]int64{
+		0: 240, 1: 106, 2: 76, 3: 81, 4: 68, 5: 58, 6: 50,
+	} {
+		reqs = append(reqs, colWidthReq(indMain.id, col, px))
+	}
 
 	_, err := w.svc.Spreadsheets.BatchUpdate(
 		w.spreadsheetID,
@@ -299,49 +371,34 @@ func cellFormatReq(sheetID, startRow, endRow, startCol, endCol int64, format *sh
 	}
 }
 
-// freezeRowsReq builds an UpdateSheetPropertiesRequest to freeze the first n rows.
-func freezeRowsReq(sheetID, n int64) *sheets.Request {
+// freezePaneReq freezes the first rows and cols (pane at cell [rows, cols]).
+func freezePaneReq(sheetID, rows, cols int64) *sheets.Request {
 	return &sheets.Request{
 		UpdateSheetProperties: &sheets.UpdateSheetPropertiesRequest{
 			Properties: &sheets.SheetProperties{
-				SheetId:        sheetID,
-				GridProperties: &sheets.GridProperties{FrozenRowCount: n},
+				SheetId: sheetID,
+				GridProperties: &sheets.GridProperties{
+					FrozenRowCount:    rows,
+					FrozenColumnCount: cols,
+				},
 			},
-			Fields: "gridProperties.frozenRowCount",
+			Fields: "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
 		},
 	}
 }
 
-// bandingReq builds an AddBandingRequest for alternating row colors starting at startRow.
-func bandingReq(sheetID, startRow, startCol, endCol int64, first, second *sheets.Color) *sheets.Request {
+// colWidthReq sets the pixel width of a single column.
+func colWidthReq(sheetID, col, pixels int64) *sheets.Request {
 	return &sheets.Request{
-		AddBanding: &sheets.AddBandingRequest{
-			BandedRange: &sheets.BandedRange{
-				Range: &sheets.GridRange{
-					SheetId:          sheetID,
-					StartRowIndex:    startRow,
-					StartColumnIndex: startCol,
-					EndColumnIndex:   endCol,
-				},
-				RowProperties: &sheets.BandingProperties{
-					FirstBandColor:  first,
-					SecondBandColor: second,
-				},
-			},
-		},
-	}
-}
-
-// autosizeColsReq builds an AutoResizeDimensionsRequest for columns startCol..endCol.
-func autosizeColsReq(sheetID, startCol, endCol int64) *sheets.Request {
-	return &sheets.Request{
-		AutoResizeDimensions: &sheets.AutoResizeDimensionsRequest{
-			Dimensions: &sheets.DimensionRange{
+		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range: &sheets.DimensionRange{
 				SheetId:    sheetID,
 				Dimension:  "COLUMNS",
-				StartIndex: startCol,
-				EndIndex:   endCol,
+				StartIndex: col,
+				EndIndex:   col + 1,
 			},
+			Properties: &sheets.DimensionProperties{PixelSize: pixels},
+			Fields:     "pixelSize",
 		},
 	}
 }

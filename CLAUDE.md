@@ -39,6 +39,17 @@ There is no `internal/worker` package; all scheduling is external.
 - Token prices captured at snapshot time live in `FundAccountPortfolio.Tokens[].PriceInEURMTL` — use these for historical price lookups (see `findBTCPrice` in `layer0.go` as a pattern).
 - `snapshot.Repository.GetByDate` requires exact date match (midnight UTC); snapshots are stored by `stat report` using `time.Date(..., time.UTC)`.
 
+### Google Sheets Export
+- `internal/export/sheets.go` — IND_ALL and IND_MAIN are **clear+rewrite** each run.
+- `internal/export/monitoring.go` — MONITORING sheet is **append-only** (one row per daily run via `Values.Append` with `INSERT_ROWS`).
+- `export.Service.Export` returns `([]IndicatorRow, error)` — rows are reused by `AppendMonitoring` to avoid recalculating indicators.
+- MONITORING column mapping is in `monitoringColumns` slice — when adding new indicators, add the mapping there too.
+- All three sheets match the original `MTL_report_1.xlsx` formatting exactly:
+  - **IND_ALL**: light-green `#D9EAD3` headers, bold Arial 10pt, freeze M2 (1 row + 12 cols), thin borders around change cols F–I, MAIN col L has gray `#D9D9D9` background.
+  - **IND_MAIN**: light-yellow `#FFE599` headers, freeze D3 (2 rows + 3 cols), Value col B is 12pt bold, change cols D–E `0.00%`, F–G `0%`.
+  - **MONITORING**: light-green `#D9EAD3` headers with vertical text (90°), freeze B3, row 2 height 100px (75pt), date col A has green background, per-column widths from Excel.
+- Shared helpers: `cellFormatReq`, `freezePaneReq`, `colWidthReq` — used by both files.
+
 ### Key Domain Constants
 - `domain.IssuerAddress` — main fund issuer Stellar address
 - `domain.EURMTLAsset()` — fund base asset (EUR-pegged stablecoin)
@@ -76,10 +87,18 @@ path = u.Path + "?" + u.RawQuery
 - Balance parse errors in helpers should `slog.Warn` before returning zero — distinguish "not found" from "corrupt data".
 - When one failed API call cascades to zero out multiple indicators, log the cascade explicitly (which indicators are affected and why).
 
+## Local Development with Docker
+
+- `.env` contains multiline JSON (`GOOGLE_CREDENTIALS_JSON`) — cannot be `source`d in shell directly.
+- Use `docker compose` for local runs: `docker compose build app && docker compose run --rm --entrypoint "./stat" app report`
+- Dockerfile ENTRYPOINT is `./stat`, CMD is `serve` — to run subcommands use `--entrypoint "./stat" app <subcommand>`.
+- `docker compose up -d db` starts just PostgreSQL; `docker compose run --rm` for one-shot commands.
+
 ## Git Conventions
 
 - **Commit messages**: Use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
 - **PR Merge Strategy**: Repository only allows rebase merges. Use `gh pr merge --rebase --delete-branch`
+- **gitignore quirk**: `cmd/stat` is gitignored (for the binary). Use `git add -f cmd/stat/main.go` when staging source files there.
 
 ## samber/lo - Utility Library
 
