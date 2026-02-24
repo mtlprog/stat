@@ -54,11 +54,12 @@ func NewService(indicators *indicator.Service, snapshots snapshot.Repository, wr
 	}
 }
 
-// Export calculates all indicators with historical changes and writes to the sheet.
-func (s *Service) Export(ctx context.Context, data domain.FundStructureData) error {
+// Export calculates all indicators with historical changes, writes to IND_ALL/IND_MAIN,
+// and returns the computed rows for callers that need them (e.g. MONITORING append).
+func (s *Service) Export(ctx context.Context, data domain.FundStructureData) ([]IndicatorRow, error) {
 	current, err := s.indicators.CalculateAll(ctx, data)
 	if err != nil {
-		return fmt.Errorf("calculating current indicators: %w", err)
+		return nil, fmt.Errorf("calculating current indicators: %w", err)
 	}
 
 	historicalByPeriod := s.fetchHistorical(ctx, []int{7, 30, 90, 365})
@@ -78,7 +79,10 @@ func (s *Service) Export(ctx context.Context, data domain.FundStructureData) err
 		rows = append(rows, row)
 	}
 
-	return s.writer.Write(ctx, rows)
+	if err := s.writer.Write(ctx, rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // fetchHistorical retrieves historical indicator sets for each period (days ago).
