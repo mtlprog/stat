@@ -146,42 +146,121 @@ func (w *SheetsWriter) AppendMonitoring(ctx context.Context, rows []IndicatorRow
 	return nil
 }
 
-// applyMonitoringFormatting applies visual formatting to the MONITORING sheet.
+// monitoringIntegerCols lists column indices (0-based) that use #,##0 format.
+// B=1, D=3, E=4, F=5, G=6, H=7, L=11, M=12, V=21, W=22
+var monitoringIntegerCols = []int{1, 3, 4, 5, 6, 7, 11, 12, 21, 22}
+
+// applyMonitoringFormatting applies visual formatting to the MONITORING sheet,
+// matching the original Excel layout: light-green headers, centered text,
+// frozen column A + rows 1-2, narrow columns with vertical header text.
 func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetMeta) error {
-	navyBlue := &sheets.Color{Red: 0.122, Green: 0.220, Blue: 0.392}
-	white := &sheets.Color{Red: 1, Green: 1, Blue: 1}
-	lightBlue := &sheets.Color{Red: 0.898, Green: 0.929, Blue: 0.992}
+	// #D9EAD3 — light green from the original Excel
+	lightGreen := &sheets.Color{Red: 0.851, Green: 0.918, Blue: 0.827}
 
 	const totalCols = 41
 
 	var reqs []*sheets.Request
 
-	// Row 1 + Row 2: navy background, bold white text
-	reqs = append(reqs, cellFormatReq(mon.id, 0, 2, 0, totalCols,
+	// Row 1 (column numbers): light-green background, centered, font size 10
+	reqs = append(reqs, cellFormatReq(mon.id, 0, 1, 0, totalCols,
 		&sheets.CellFormat{
-			BackgroundColor: navyBlue,
-			TextFormat:      &sheets.TextFormat{Bold: true, ForegroundColor: white},
+			BackgroundColor:     lightGreen,
+			TextFormat:          &sheets.TextFormat{FontSize: 10},
+			HorizontalAlignment: "CENTER",
+			VerticalAlignment:   "MIDDLE",
 		},
-		"userEnteredFormat(backgroundColor,textFormat)"))
+		"userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)"))
 
-	// Freeze first two rows
-	reqs = append(reqs, freezeRowsReq(mon.id, 2))
+	// Row 2 (header names): light-green background, bold, font size 8, centered,
+	// vertical text rotation to fit narrow columns (matching Excel's 75px row height)
+	reqs = append(reqs, cellFormatReq(mon.id, 1, 2, 0, totalCols,
+		&sheets.CellFormat{
+			BackgroundColor: lightGreen,
+			TextFormat:      &sheets.TextFormat{Bold: true, FontSize: 8},
+			TextRotation:    &sheets.TextRotation{Angle: 90},
+			HorizontalAlignment: "CENTER",
+			VerticalAlignment:   "BOTTOM",
+		},
+		"userEnteredFormat(backgroundColor,textFormat,textRotation,horizontalAlignment,verticalAlignment)"))
 
-	// Number format for data columns B..AO (cols 1..40)
-	reqs = append(reqs, cellFormatReq(mon.id, 2, 10000, 1, totalCols,
-		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0.00"}},
+	// Row 2 height: 150px to match vertical headers
+	reqs = append(reqs, &sheets.Request{
+		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range: &sheets.DimensionRange{
+				SheetId:    mon.id,
+				Dimension:  "ROWS",
+				StartIndex: 1,
+				EndIndex:   2,
+			},
+			Properties: &sheets.DimensionProperties{PixelSize: 150},
+			Fields:     "pixelSize",
+		},
+	})
+
+	// Freeze column A + rows 1-2 (B3 freeze pane like the Excel)
+	reqs = append(reqs, &sheets.Request{
+		UpdateSheetProperties: &sheets.UpdateSheetPropertiesRequest{
+			Properties: &sheets.SheetProperties{
+				SheetId: mon.id,
+				GridProperties: &sheets.GridProperties{
+					FrozenRowCount:    2,
+					FrozenColumnCount: 1,
+				},
+			},
+			Fields: "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+		},
+	})
+
+	// All data cells: centered text
+	reqs = append(reqs, cellFormatReq(mon.id, 2, 10000, 0, totalCols,
+		&sheets.CellFormat{HorizontalAlignment: "CENTER"},
+		"userEnteredFormat.horizontalAlignment"))
+
+	// Date column A: date format d.m.yyyy
+	reqs = append(reqs, cellFormatReq(mon.id, 2, 10000, 0, 1,
+		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "DATE", Pattern: "d.m.yyyy"}},
 		"userEnteredFormat.numberFormat"))
 
-	// Banding
+	// Integer columns: #,##0 format (no decimal places)
+	for _, col := range monitoringIntegerCols {
+		reqs = append(reqs, cellFormatReq(mon.id, 2, 10000, int64(col), int64(col+1),
+			&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0"}},
+			"userEnteredFormat.numberFormat"))
+	}
+
+	// Remove any existing banding (we don't use banding — matching Excel)
 	for _, bid := range mon.bandingIDs {
 		reqs = append(reqs, &sheets.Request{
 			DeleteBanding: &sheets.DeleteBandingRequest{BandedRangeId: bid},
 		})
 	}
-	reqs = append(reqs, bandingReq(mon.id, 2, 0, totalCols, white, lightBlue))
 
-	// Autosize all columns
-	reqs = append(reqs, autosizeColsReq(mon.id, 0, totalCols))
+	// Set narrow column widths to match Excel's compact layout
+	// Column A (date): 80px, data columns: 60px
+	reqs = append(reqs, &sheets.Request{
+		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range: &sheets.DimensionRange{
+				SheetId:    mon.id,
+				Dimension:  "COLUMNS",
+				StartIndex: 0,
+				EndIndex:   1,
+			},
+			Properties: &sheets.DimensionProperties{PixelSize: 80},
+			Fields:     "pixelSize",
+		},
+	})
+	reqs = append(reqs, &sheets.Request{
+		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range: &sheets.DimensionRange{
+				SheetId:    mon.id,
+				Dimension:  "COLUMNS",
+				StartIndex: 1,
+				EndIndex:   int64(totalCols),
+			},
+			Properties: &sheets.DimensionProperties{PixelSize: 60},
+			Fields:     "pixelSize",
+		},
+	})
 
 	_, err := w.svc.Spreadsheets.BatchUpdate(
 		w.spreadsheetID,
