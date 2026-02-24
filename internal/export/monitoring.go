@@ -183,7 +183,21 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		},
 		"userEnteredFormat(backgroundColor,textFormat,textRotation,horizontalAlignment,verticalAlignment)"))
 
-	// Row 2 height: 150px to match vertical headers
+	// Row 1 height: 31px (23.25pt from original Excel)
+	reqs = append(reqs, &sheets.Request{
+		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range: &sheets.DimensionRange{
+				SheetId:    mon.id,
+				Dimension:  "ROWS",
+				StartIndex: 0,
+				EndIndex:   1,
+			},
+			Properties: &sheets.DimensionProperties{PixelSize: 31},
+			Fields:     "pixelSize",
+		},
+	})
+
+	// Row 2 height: 100px (75pt from original Excel)
 	reqs = append(reqs, &sheets.Request{
 		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
 			Range: &sheets.DimensionRange{
@@ -192,7 +206,7 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 				StartIndex: 1,
 				EndIndex:   2,
 			},
-			Properties: &sheets.DimensionProperties{PixelSize: 150},
+			Properties: &sheets.DimensionProperties{PixelSize: 100},
 			Fields:     "pixelSize",
 		},
 	})
@@ -216,10 +230,13 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		&sheets.CellFormat{HorizontalAlignment: "CENTER"},
 		"userEnteredFormat.horizontalAlignment"))
 
-	// Date column A: date format d.m.yyyy
+	// Date column A: date format d.m.yyyy, light green background (matching original Excel)
 	reqs = append(reqs, cellFormatReq(mon.id, 2, 10000, 0, 1,
-		&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "DATE", Pattern: "d.m.yyyy"}},
-		"userEnteredFormat.numberFormat"))
+		&sheets.CellFormat{
+			NumberFormat:    &sheets.NumberFormat{Type: "DATE", Pattern: "d.m.yyyy"},
+			BackgroundColor: lightGreen,
+		},
+		"userEnteredFormat(numberFormat,backgroundColor)"))
 
 	// Integer columns: #,##0 format (no decimal places)
 	for _, col := range monitoringIntegerCols {
@@ -235,32 +252,23 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		})
 	}
 
-	// Set narrow column widths to match Excel's compact layout
-	// Column A (date): 80px, data columns: 60px
-	reqs = append(reqs, &sheets.Request{
-		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range: &sheets.DimensionRange{
-				SheetId:    mon.id,
-				Dimension:  "COLUMNS",
-				StartIndex: 0,
-				EndIndex:   1,
-			},
-			Properties: &sheets.DimensionProperties{PixelSize: 80},
-			Fields:     "pixelSize",
-		},
-	})
-	reqs = append(reqs, &sheets.Request{
-		UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range: &sheets.DimensionRange{
-				SheetId:    mon.id,
-				Dimension:  "COLUMNS",
-				StartIndex: 1,
-				EndIndex:   int64(totalCols),
-			},
-			Properties: &sheets.DimensionProperties{PixelSize: 60},
-			Fields:     "pixelSize",
-		},
-	})
+	// Column widths sized to fit content: wide for large numbers,
+	// narrow for empty/nil columns, default 35px for small decimals.
+	monColWidths := map[int64]int64{
+		0: 65, 1: 75, 2: 40, 3: 75, 4: 50, 5: 55, 6: 50, 7: 60, // Date..MTLRECT
+		9: 30, 11: 50, 12: 50,                                     // RegPrice, Dividends
+		13: 22, 14: 22, 19: 22, 20: 22,                            // empty cols
+		21: 50, 22: 55, 23: 30, 24: 50, 27: 50, 40: 50,           // large-number cols
+		28: 22, 29: 22, 31: 22, 32: 22,                            // empty cols
+		35: 22, 36: 22, 37: 22, 38: 22, 39: 22,                   // empty cols
+	}
+	for col := range int64(totalCols) {
+		px := int64(35)
+		if p, ok := monColWidths[col]; ok {
+			px = p
+		}
+		reqs = append(reqs, colWidthReq(mon.id, col, px))
+	}
 
 	_, err := w.svc.Spreadsheets.BatchUpdate(
 		w.spreadsheetID,
