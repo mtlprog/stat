@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/samber/lo"
@@ -90,6 +91,10 @@ func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any,
 			if ind, ok := byID[col.indicatorID]; ok {
 				data[i+1] = toFloat(ind.Value)
 			} else {
+				slog.Warn("monitoring: indicator missing, writing zero",
+					"indicatorID", col.indicatorID,
+					"column", col.header,
+				)
 				data[i+1] = float64(0)
 			}
 		} else {
@@ -127,6 +132,21 @@ func (w *SheetsWriter) AppendMonitoring(ctx context.Context, rows []IndicatorRow
 		).ValueInputOption("USER_ENTERED").Context(ctx).Do()
 		if err != nil {
 			return fmt.Errorf("writing MONITORING headers: %w", err)
+		}
+	}
+
+	// Check for duplicate date to prevent double-append on same-day reruns.
+	todayStr := now.Format("02.01.2006")
+	dates, err := w.svc.Spreadsheets.Values.Get(
+		w.spreadsheetID, "MONITORING!A3:A",
+	).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("reading MONITORING dates: %w", err)
+	}
+	for _, row := range dates.Values {
+		if len(row) > 0 && fmt.Sprint(row[0]) == todayStr {
+			slog.Warn("monitoring: row for today already exists, skipping append", "date", todayStr)
+			return nil
 		}
 	}
 
