@@ -217,7 +217,9 @@ func runImport(c *cli.Context) error {
 	}
 	slog.Info("fetched snapshot list", "count", len(dates))
 
-	var imported, skipped int
+	const maxConsecutiveErrors = 5
+
+	var imported, skipped, consecutiveErrors int
 	for _, d := range dates {
 		date := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
 
@@ -226,24 +228,38 @@ func runImport(c *cli.Context) error {
 		if err == nil {
 			slog.Info("skipping existing snapshot", "date", date.Format("2006-01-02"))
 			skipped++
+			consecutiveErrors = 0
 			continue
 		}
 		if !errors.Is(err, snapshot.ErrNotFound) {
+			consecutiveErrors++
 			slog.Error("checking existing snapshot", "date", date.Format("2006-01-02"), "error", err)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting import after %d consecutive errors, last: %w", consecutiveErrors, err)
+			}
 			continue
 		}
 
 		data, err := fetchAndTransform(ctx, httpClient, apiURL, d)
 		if err != nil {
+			consecutiveErrors++
 			slog.Error("failed to import snapshot", "date", date.Format("2006-01-02"), "error", err)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting import after %d consecutive errors, last: %w", consecutiveErrors, err)
+			}
 			continue
 		}
 
 		if err := snapshotRepo.Save(ctx, entityID, date, data); err != nil {
+			consecutiveErrors++
 			slog.Error("failed to save snapshot", "date", date.Format("2006-01-02"), "error", err)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting import after %d consecutive errors, last: %w", consecutiveErrors, err)
+			}
 			continue
 		}
 
+		consecutiveErrors = 0
 		imported++
 		slog.Info("imported snapshot", "date", date.Format("2006-01-02"))
 	}
@@ -270,15 +286,19 @@ func runImport(c *cli.Context) error {
 	partialIndicatorSvc := indicator.NewService(nil, nil, hist)
 	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
 
-	// IDs that can be computed from snapshot data alone (no LiveMetrics/Horizon needed).
+	// IDs that produce correct values from snapshot data alone, even when Horizon
+	// is nil. Layer0 (I51-I53, I56-I61) reads only account balances/prices stored
+	// in the snapshot. Layer1 I3 (Assets Value) and I4 (Operating Balance) depend
+	// on Layer0 outputs, not on Horizon. Other Layer1+ indicators (I5-I7, I10, etc.)
+	// require Horizon for circulation/dividend data and will be zero — excluded here.
 	snapshotOnlyIDs := map[int]bool{
 		3: true, 4: true,
 		51: true, 52: true, 53: true, 56: true, 57: true, 58: true, 59: true, 60: true, 61: true,
 	}
 
-	// Delete and recreate MONITORING sheet to reset data and formatting.
-	if err := sheetsWriter.ResetMonitoringSheet(ctx); err != nil {
-		slog.Warn("failed to reset MONITORING sheet, continuing anyway", "error", err)
+	// Delete existing MONITORING sheet so the bulk import starts clean.
+	if err := sheetsWriter.DeleteMonitoringSheet(ctx); err != nil {
+		return fmt.Errorf("deleting MONITORING sheet: %w", err)
 	}
 
 	// Append MONITORING rows for all dates (oldest first).
@@ -379,6 +399,9 @@ type oldFundStructure struct {
 	OtherAccounts []domain.FundAccountPortfolio `json:"otherAccounts"`
 }
 
+// maxResponseBody limits HTTP response reads to 50 MB.
+const maxResponseBody = 50 << 20
+
 func fetchOldSnapshots(ctx context.Context, client *http.Client, apiURL string) ([]time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/api/snapshots", nil)
 	if err != nil {
@@ -392,10 +415,11 @@ func fetchOldSnapshots(ctx context.Context, client *http.Client, apiURL string) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from /api/snapshots", resp.StatusCode)
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("unexpected status %d from /api/snapshots: %s", resp.StatusCode, snippet)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -411,7 +435,7 @@ func fetchOldSnapshots(ctx context.Context, client *http.Client, apiURL string) 
 }
 
 func fetchAndTransform(ctx context.Context, client *http.Client, apiURL string, date time.Time) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/api/fund-structure?date=%s", apiURL, date.Format("2006-01-02T15:04:05.000Z"))
+	url := fmt.Sprintf("%s/api/fund-structure?date=%s", apiURL, date.UTC().Format(time.RFC3339))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -424,10 +448,11 @@ func fetchAndTransform(ctx context.Context, client *http.Client, apiURL string, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d for date %s", resp.StatusCode, date.Format("2006-01-02"))
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("unexpected status %d for date %s: %s", resp.StatusCode, date.Format("2006-01-02"), snippet)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
