@@ -91,6 +91,10 @@ func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any,
 			if ind, ok := byID[col.indicatorID]; ok {
 				data[i+1] = toFloat(ind.Value)
 			} else {
+				slog.Warn("monitoring: indicator missing, writing empty cell",
+					"indicatorID", col.indicatorID,
+					"column", col.header,
+				)
 				data[i+1] = nil
 			}
 		} else {
@@ -101,9 +105,9 @@ func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any,
 	return headerRows, data
 }
 
-// ResetMonitoringSheet deletes the MONITORING sheet entirely and recreates it.
-// This resets all data AND formatting to a clean state.
-func (w *SheetsWriter) ResetMonitoringSheet(ctx context.Context) error {
+// DeleteMonitoringSheet deletes the MONITORING sheet if it exists.
+// After deletion, appendMonitoringRow will recreate it via ensureSheets.
+func (w *SheetsWriter) DeleteMonitoringSheet(ctx context.Context) error {
 	spreadsheet, err := w.svc.Spreadsheets.Get(w.spreadsheetID).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("getting spreadsheet: %w", err)
@@ -119,10 +123,12 @@ func (w *SheetsWriter) ResetMonitoringSheet(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("deleting MONITORING sheet: %w", err)
 			}
-			break
+			slog.Info("deleted existing MONITORING sheet")
+			return nil
 		}
 	}
 
+	slog.Info("MONITORING sheet does not exist, nothing to delete")
 	return nil
 }
 
