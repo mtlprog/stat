@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 	"github.com/urfave/cli/v2"
+	"github.com/xuri/excelize/v2"
 
 	"github.com/mtlprog/stat/internal/api"
 	"github.com/mtlprog/stat/internal/config"
@@ -70,6 +72,18 @@ func main() {
 					},
 				},
 				Action: runImport,
+			},
+			{
+				Name:  "import-excel",
+				Usage: "Import historical MONITORING data from an Excel file",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "file",
+						Usage:    "Path to the Excel file (e.g. MTL_report_1.xlsx)",
+						Required: true,
+					},
+				},
+				Action: runImportExcel,
 			},
 		},
 	}
@@ -506,6 +520,268 @@ func fetchAndTransform(ctx context.Context, client *http.Client, apiURL string, 
 	}
 
 	return result, nil
+}
+
+func runImportExcel(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+	filePath := c.String("file")
+
+	// Read the Excel MONITORING tab.
+	excelRows, lastExcelDate, err := readExcelMonitoring(filePath)
+	if err != nil {
+		return fmt.Errorf("reading Excel file: %w", err)
+	}
+	slog.Info("read Excel MONITORING data", "rows", len(excelRows)-2, "lastDate", lastExcelDate.Format("2006-01-02"))
+
+	if cfg.GoogleSheetsSpreadsheetID == "" || cfg.GoogleCredentialsJSON == "" {
+		return fmt.Errorf("GOOGLE_SHEETS_SPREADSHEET_ID and GOOGLE_CREDENTIALS_JSON are required")
+	}
+
+	sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
+	if err != nil {
+		return fmt.Errorf("initializing Google Sheets writer: %w", err)
+	}
+
+	// Delete existing MONITORING sheet for clean rebuild.
+	if err := sheetsWriter.DeleteMonitoringSheet(ctx); err != nil {
+		return fmt.Errorf("deleting MONITORING sheet: %w", err)
+	}
+
+	// Bulk-write all Excel rows (headers + data) at once.
+	if err := sheetsWriter.WriteMonitoringBulk(ctx, excelRows); err != nil {
+		return fmt.Errorf("writing Excel data to MONITORING: %w", err)
+	}
+	slog.Info("wrote Excel MONITORING data to Google Sheets")
+
+	// Append DB snapshots for dates after the last Excel date.
+	if cfg.DatabaseURL == "" {
+		slog.Info("DATABASE_URL not set, skipping DB snapshot append")
+		if err := sheetsWriter.ApplyMonitoringFormatting(ctx); err != nil {
+			return fmt.Errorf("applying MONITORING formatting: %w", err)
+		}
+		return nil
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	snapshotRepo := snapshot.NewPgRepository(pool)
+	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
+	priceSvc := price.NewService(horizonClient)
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+
+	// Iterate day by day from lastExcelDate+1 to today.
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	appended := 0
+
+	for d := lastExcelDate.AddDate(0, 0, 1); !d.After(today); d = d.AddDate(0, 0, 1) {
+		snap, err := snapshotRepo.GetByDate(ctx, "mtlf", d)
+		if err != nil {
+			slog.Debug("no snapshot for date", "date", d.Format("2006-01-02"))
+			continue
+		}
+
+		var fundData domain.FundStructureData
+		if err := json.Unmarshal(snap.Data, &fundData); err != nil {
+			slog.Warn("failed to unmarshal snapshot", "date", d.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		indicators, err := fullIndicatorSvc.CalculateAll(ctx, fundData)
+		if err != nil {
+			slog.Warn("failed to calculate indicators", "date", d.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		rows := lo.Map(indicators, func(ind indicator.Indicator, _ int) export.IndicatorRow {
+			return export.IndicatorRow{Indicator: ind}
+		})
+
+		if err := sheetsWriter.AppendMonitoringRowOnly(ctx, rows, d); err != nil {
+			slog.Warn("failed to append MONITORING row", "date", d.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		appended++
+		slog.Info("appended MONITORING row from DB", "date", d.Format("2006-01-02"))
+		time.Sleep(3 * time.Second)
+	}
+
+	slog.Info("DB snapshot append complete", "appended", appended)
+
+	// Apply MONITORING formatting.
+	if err := sheetsWriter.ApplyMonitoringFormatting(ctx); err != nil {
+		return fmt.Errorf("applying MONITORING formatting: %w", err)
+	}
+
+	// Refresh IND_ALL / IND_MAIN with latest snapshot.
+	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {
+		return fmt.Errorf("ensuring entity: %w", err)
+	}
+
+	latestSnap, err := snapshotRepo.GetLatest(ctx, "mtlf")
+	if err != nil {
+		slog.Warn("no snapshots found, skipping IND_ALL/IND_MAIN refresh", "error", err)
+		return nil
+	}
+
+	var latestData domain.FundStructureData
+	if err := json.Unmarshal(latestSnap.Data, &latestData); err != nil {
+		return fmt.Errorf("unmarshaling latest snapshot: %w", err)
+	}
+
+	exportSvc := export.NewService(fullIndicatorSvc, snapshotRepo, sheetsWriter)
+	monHist := buildMonitoringHistory(excelRows)
+	if _, err := exportSvc.ExportWithHistory(ctx, latestData, monHist); err != nil {
+		return fmt.Errorf("exporting to Google Sheets: %w", err)
+	}
+	slog.Info("Google Sheets IND_ALL/IND_MAIN export completed")
+
+	return nil
+}
+
+// readExcelMonitoring reads the MONITORING sheet from an Excel file and returns
+// all rows (2 header rows + data rows) as [][]any, plus the last data date.
+func readExcelMonitoring(filePath string) ([][]any, time.Time, error) {
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("opening file: %w", err)
+	}
+	defer f.Close()
+
+	xlRows, err := f.GetRows("MONITORING")
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("reading MONITORING sheet: %w", err)
+	}
+
+	if len(xlRows) < 3 {
+		return nil, time.Time{}, fmt.Errorf("MONITORING sheet has fewer than 3 rows")
+	}
+
+	const totalCols = 41 // A through AO
+
+	var allRows [][]any
+	var lastDate time.Time
+
+	for rowIdx, xlRow := range xlRows {
+		row := make([]any, totalCols)
+		for colIdx := range totalCols {
+			if colIdx >= len(xlRow) || xlRow[colIdx] == "" {
+				row[colIdx] = nil
+				continue
+			}
+			cellVal := xlRow[colIdx]
+
+			if rowIdx >= 2 && colIdx == 0 {
+				// Date column: parse and format as dd.mm.yyyy for Google Sheets.
+				t, err := parseExcelDate(cellVal)
+				if err != nil {
+					slog.Warn("skipping row with unparseable date", "row", rowIdx+1, "value", cellVal, "error", err)
+					row = nil
+					break
+				}
+				row[0] = t.Format("02.01.2006")
+				lastDate = t
+			} else if rowIdx >= 2 && colIdx > 0 {
+				// Data cells: convert to float where possible.
+				// Excelize formats numbers with commas (e.g. "1,827,956"), strip them.
+				row[colIdx] = parseExcelNumber(cellVal)
+			} else {
+				// Header rows: keep as string but try to convert numbers.
+				row[colIdx] = parseExcelNumber(cellVal)
+			}
+		}
+		if row != nil {
+			allRows = append(allRows, row)
+		}
+	}
+
+	if lastDate.IsZero() {
+		return nil, time.Time{}, fmt.Errorf("no valid dates found in MONITORING sheet")
+	}
+
+	return allRows, lastDate, nil
+}
+
+// parseExcelNumber tries to convert a string to a float64, stripping commas
+// from formatted numbers. Excel error values (#REF!, #DIV/0!, #N/A, etc.)
+// are replaced with nil to avoid Google Sheets interpreting them as errors.
+// Returns the original string if not a number and not an error.
+func parseExcelNumber(s string) any {
+	if strings.HasPrefix(s, "#") {
+		return nil
+	}
+	cleaned := strings.ReplaceAll(s, ",", "")
+	d, err := decimal.NewFromString(cleaned)
+	if err != nil {
+		return s
+	}
+	f, _ := d.Float64()
+	return f
+}
+
+// parseExcelDate parses date strings in formats used by excelize output.
+func parseExcelDate(s string) (time.Time, error) {
+	for _, layout := range []string{
+		"01-02-06",       // excelize default for dates
+		"1/2/06",         // US short
+		"2006-01-02",     // ISO
+		"02.01.2006",     // dd.mm.yyyy
+		"1/2/2006",       // US long
+		"01-02-2006",     // excelize long
+		"2006-01-02T15:04:05Z",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse date: %q", s)
+}
+
+// buildMonitoringHistory converts Excel MONITORING rows into an export.MonitoringHistory
+// for use by ExportWithHistory to fill historical change gaps.
+func buildMonitoringHistory(excelRows [][]any) export.MonitoringHistory {
+	colIDs := export.MonitoringColumnIndicatorIDs()
+	hist := make(export.MonitoringHistory, len(excelRows))
+
+	for i, row := range excelRows {
+		if i < 2 || len(row) == 0 {
+			continue // skip header rows
+		}
+		dateStr, ok := row[0].(string)
+		if !ok {
+			continue
+		}
+		t, err := time.Parse("02.01.2006", dateStr)
+		if err != nil {
+			continue
+		}
+		date := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		vals := make(map[int]decimal.Decimal)
+		for j := 0; j < len(colIDs) && j+1 < len(row); j++ {
+			if colIDs[j] == 0 {
+				continue
+			}
+			if f, ok := row[j+1].(float64); ok {
+				vals[colIDs[j]] = decimal.NewFromFloat(f)
+			}
+		}
+		if len(vals) > 0 {
+			hist[date] = vals
+		}
+	}
+
+	return hist
 }
 
 func runServe(c *cli.Context) error {

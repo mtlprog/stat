@@ -116,6 +116,77 @@ func (s *Service) fetchHistorical(ctx context.Context, periods []int) map[int]ma
 	return result
 }
 
+// MonitoringHistory maps dates to indicator values extracted from MONITORING sheet rows.
+// Keys are dates (midnight UTC), values map indicator ID → value.
+type MonitoringHistory map[time.Time]map[int]decimal.Decimal
+
+// NearestBefore returns indicator values for the latest date in the history that is ≤ target.
+// Returns nil if no qualifying date exists.
+func (mh MonitoringHistory) NearestBefore(target time.Time) map[int]indicator.Indicator {
+	var best time.Time
+	var found bool
+	for d := range mh {
+		if !d.After(target) && (d.After(best) || !found) {
+			best = d
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	vals := mh[best]
+	result := make(map[int]indicator.Indicator, len(vals))
+	for id, v := range vals {
+		result[id] = indicator.Indicator{ID: id, Value: v}
+	}
+	return result
+}
+
+// ExportWithHistory works like Export but fills gaps in historical data from monHist
+// when DB snapshots are unavailable. Use this for import-excel where the DB has few
+// snapshots but the Excel MONITORING sheet has full history.
+func (s *Service) ExportWithHistory(ctx context.Context, data domain.FundStructureData, monHist MonitoringHistory) ([]IndicatorRow, error) {
+	current, err := s.indicators.CalculateAll(ctx, data)
+	if err != nil {
+		return nil, fmt.Errorf("calculating current indicators: %w", err)
+	}
+
+	historicalByPeriod := s.fetchHistorical(ctx, []int{7, 30, 90, 365})
+
+	// Fill gaps from monitoring history.
+	now := time.Now().UTC()
+	for _, days := range []int{7, 30, 90, 365} {
+		if historicalByPeriod[days] != nil {
+			continue
+		}
+		pastDate := now.AddDate(0, 0, -days)
+		if fallback := monHist.NearestBefore(pastDate); fallback != nil {
+			historicalByPeriod[days] = fallback
+			slog.Info("export: using monitoring history for period", "days", days)
+		}
+	}
+
+	rows := make([]IndicatorRow, 0, len(current))
+	for _, ind := range current {
+		row := IndicatorRow{
+			Indicator: ind,
+			IsMain:    mainIndicatorIDs[ind.ID],
+		}
+
+		row.WeekChange = computeChange(ind.ID, ind.Value, historicalByPeriod[7])
+		row.MonthChange = computeChange(ind.ID, ind.Value, historicalByPeriod[30])
+		row.QuarterChange = computeChange(ind.ID, ind.Value, historicalByPeriod[90])
+		row.YearChange = computeChange(ind.ID, ind.Value, historicalByPeriod[365])
+
+		rows = append(rows, row)
+	}
+
+	if err := s.writer.Write(ctx, rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // computeChange returns (current - historical) / historical, or nil if unavailable.
 func computeChange(id int, current decimal.Decimal, byID map[int]indicator.Indicator) *decimal.Decimal {
 	if byID == nil {
