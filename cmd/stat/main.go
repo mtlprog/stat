@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
+	"github.com/samber/lo"
+	"github.com/shopspring/decimal"
 	"github.com/urfave/cli/v2"
 
 	"github.com/mtlprog/stat/internal/api"
@@ -52,6 +58,18 @@ func main() {
 				Name:   "report",
 				Usage:  "Generate fund snapshot and export to Sheets",
 				Action: runReport,
+			},
+			{
+				Name:  "import",
+				Usage: "Import historical snapshots from the old stat API",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "api-url",
+						Usage: "Base URL of the old stat API",
+						Value: "https://stat.mtlf.me",
+					},
+				},
+				Action: runImport,
 			},
 		},
 	}
@@ -163,6 +181,306 @@ func runReport(c *cli.Context) error {
 	}
 
 	return nil
+}
+
+func runImport(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+	apiURL := c.String("api-url")
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	snapshotRepo := snapshot.NewPgRepository(pool)
+	entityID, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics")
+	if err != nil {
+		return fmt.Errorf("ensuring entity: %w", err)
+	}
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+
+	// Fetch snapshot date list from old API.
+	dates, err := fetchOldSnapshots(ctx, httpClient, apiURL)
+	if err != nil {
+		return fmt.Errorf("fetching snapshot list: %w", err)
+	}
+	slog.Info("fetched snapshot list", "count", len(dates))
+
+	var imported, skipped int
+	for _, d := range dates {
+		date := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
+
+		// Skip dates that already have a snapshot.
+		_, err := snapshotRepo.GetByDate(ctx, "mtlf", date)
+		if err == nil {
+			slog.Info("skipping existing snapshot", "date", date.Format("2006-01-02"))
+			skipped++
+			continue
+		}
+		if !errors.Is(err, snapshot.ErrNotFound) {
+			slog.Error("checking existing snapshot", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		data, err := fetchAndTransform(ctx, httpClient, apiURL, d)
+		if err != nil {
+			slog.Error("failed to import snapshot", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		if err := snapshotRepo.Save(ctx, entityID, date, data); err != nil {
+			slog.Error("failed to save snapshot", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		imported++
+		slog.Info("imported snapshot", "date", date.Format("2006-01-02"))
+	}
+
+	slog.Info("import complete", "imported", imported, "skipped", skipped, "errors", len(dates)-imported-skipped)
+
+	// Export to Google Sheets if configured.
+	if cfg.GoogleSheetsSpreadsheetID == "" || cfg.GoogleCredentialsJSON == "" {
+		slog.Info("Google Sheets not configured, skipping export")
+		return nil
+	}
+
+	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
+	priceSvc := price.NewService(horizonClient)
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+
+	sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
+	if err != nil {
+		return fmt.Errorf("initializing Google Sheets writer: %w", err)
+	}
+
+	// Two indicator services: partial (nil Horizon) for old snapshots,
+	// full (with Horizon) for snapshots that have live_metrics.
+	partialIndicatorSvc := indicator.NewService(nil, nil, hist)
+	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+
+	// IDs that can be computed from snapshot data alone (no LiveMetrics/Horizon needed).
+	snapshotOnlyIDs := map[int]bool{
+		3: true, 4: true,
+		51: true, 52: true, 53: true, 56: true, 57: true, 58: true, 59: true, 60: true, 61: true,
+	}
+
+	// Delete and recreate MONITORING sheet to reset data and formatting.
+	if err := sheetsWriter.ResetMonitoringSheet(ctx); err != nil {
+		slog.Warn("failed to reset MONITORING sheet, continuing anyway", "error", err)
+	}
+
+	// Append MONITORING rows for all dates (oldest first).
+	sortedDates := make([]time.Time, len(dates))
+	copy(sortedDates, dates)
+	sort.Slice(sortedDates, func(i, j int) bool { return sortedDates[i].Before(sortedDates[j]) })
+
+	for _, d := range sortedDates {
+		date := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
+
+		snap, err := snapshotRepo.GetByDate(ctx, "mtlf", date)
+		if err != nil {
+			slog.Warn("monitoring: snapshot not found", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		var fundData domain.FundStructureData
+		if err := json.Unmarshal(snap.Data, &fundData); err != nil {
+			slog.Warn("monitoring: failed to unmarshal snapshot", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		// Snapshots with live_metrics get full indicator calculation;
+		// old snapshots without it get only snapshot-computable indicators.
+		hasLiveMetrics := fundData.LiveMetrics != nil
+		var rows []export.IndicatorRow
+
+		if hasLiveMetrics {
+			indicators, err := fullIndicatorSvc.CalculateAll(ctx, fundData)
+			if err != nil {
+				slog.Warn("monitoring: failed to calculate indicators", "date", date.Format("2006-01-02"), "error", err)
+				continue
+			}
+			rows = lo.Map(indicators, func(ind indicator.Indicator, _ int) export.IndicatorRow {
+				return export.IndicatorRow{Indicator: ind}
+			})
+		} else {
+			indicators, err := partialIndicatorSvc.CalculateAll(ctx, fundData)
+			if err != nil {
+				slog.Warn("monitoring: failed to calculate indicators", "date", date.Format("2006-01-02"), "error", err)
+				continue
+			}
+			rows = lo.FilterMap(indicators, func(ind indicator.Indicator, _ int) (export.IndicatorRow, bool) {
+				if !snapshotOnlyIDs[ind.ID] {
+					return export.IndicatorRow{}, false
+				}
+				return export.IndicatorRow{Indicator: ind}, true
+			})
+		}
+
+		if err := sheetsWriter.AppendMonitoringRowOnly(ctx, rows, date); err != nil {
+			slog.Warn("monitoring: failed to append row", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
+
+		slog.Info("appended MONITORING row", "date", date.Format("2006-01-02"), "full", hasLiveMetrics)
+
+		// Respect Google Sheets API rate limits (60 read requests/min).
+		time.Sleep(3 * time.Second)
+	}
+
+	// Apply MONITORING formatting once after all rows are written.
+	if err := sheetsWriter.ApplyMonitoringFormatting(ctx); err != nil {
+		slog.Warn("failed to apply MONITORING formatting", "error", err)
+	}
+
+	// Update IND_ALL / IND_MAIN with current data.
+	indicatorSvc := fullIndicatorSvc
+	exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
+
+	latestSnap, err := snapshotRepo.GetLatest(ctx, "mtlf")
+	if err != nil {
+		return fmt.Errorf("getting latest snapshot for export: %w", err)
+	}
+
+	var latestData domain.FundStructureData
+	if err := json.Unmarshal(latestSnap.Data, &latestData); err != nil {
+		return fmt.Errorf("unmarshaling latest snapshot: %w", err)
+	}
+
+	if _, err := exportSvc.Export(ctx, latestData); err != nil {
+		return fmt.Errorf("exporting to Google Sheets: %w", err)
+	}
+	slog.Info("Google Sheets IND_ALL/IND_MAIN export completed")
+
+	return nil
+}
+
+// oldSnapshotEntry matches the old API's /api/snapshots response.
+type oldSnapshotEntry struct {
+	Date      time.Time `json:"date"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// oldFundStructure matches the old API's /api/fund-structure response.
+type oldFundStructure struct {
+	Accounts      []domain.FundAccountPortfolio `json:"accounts"`
+	OtherAccounts []domain.FundAccountPortfolio `json:"otherAccounts"`
+}
+
+func fetchOldSnapshots(ctx context.Context, client *http.Client, apiURL string) ([]time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/api/snapshots", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching snapshots: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d from /api/snapshots", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var entries []oldSnapshotEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("parsing snapshots: %w", err)
+	}
+
+	return lo.Map(entries, func(e oldSnapshotEntry, _ int) time.Time {
+		return e.Date
+	}), nil
+}
+
+func fetchAndTransform(ctx context.Context, client *http.Client, apiURL string, date time.Time) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/api/fund-structure?date=%s", apiURL, date.Format("2006-01-02T15:04:05.000Z"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching fund structure: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d for date %s", resp.StatusCode, date.Format("2006-01-02"))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var old oldFundStructure
+	if err := json.Unmarshal(body, &old); err != nil {
+		return nil, fmt.Errorf("parsing fund structure: %w", err)
+	}
+
+	// Normalize account names to match current system.
+	for i := range old.Accounts {
+		if old.Accounts[i].Name == "CITY" {
+			old.Accounts[i].Name = "MCITY"
+		}
+	}
+
+	// Split old "accounts" into main (issuer/subfond/operational) and mutual.
+	mainAccounts := lo.Filter(old.Accounts, func(a domain.FundAccountPortfolio, _ int) bool {
+		return a.Type != domain.AccountTypeMutual
+	})
+	mutualFunds := lo.Filter(old.Accounts, func(a domain.FundAccountPortfolio, _ int) bool {
+		return a.Type == domain.AccountTypeMutual
+	})
+
+	// Compute aggregated totals from main accounts only.
+	totalEURMTL := lo.Reduce(mainAccounts, func(acc decimal.Decimal, a domain.FundAccountPortfolio, _ int) decimal.Decimal {
+		return acc.Add(a.TotalEURMTL)
+	}, decimal.Zero)
+	totalXLM := lo.Reduce(mainAccounts, func(acc decimal.Decimal, a domain.FundAccountPortfolio, _ int) decimal.Decimal {
+		return acc.Add(a.TotalXLM)
+	}, decimal.Zero)
+	tokenCount := lo.Reduce(mainAccounts, func(acc int, a domain.FundAccountPortfolio, _ int) int {
+		return acc + len(a.Tokens)
+	}, 0)
+
+	newData := domain.FundStructureData{
+		Accounts:      mainAccounts,
+		MutualFunds:   mutualFunds,
+		OtherAccounts: old.OtherAccounts,
+		AggregatedTotals: domain.AggregatedTotals{
+			TotalEURMTL:  totalEURMTL,
+			TotalXLM:     totalXLM,
+			AccountCount: len(mainAccounts),
+			TokenCount:   tokenCount,
+		},
+	}
+
+	result, err := json.Marshal(newData)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling transformed data: %w", err)
+	}
+
+	return result, nil
 }
 
 func runServe(c *cli.Context) error {

@@ -98,9 +98,9 @@ func TestBuildMonitoringRows(t *testing.T) {
 		t.Errorf("data row Dividends in eurmtl: expected 4434.70, got %v", dataRow[12])
 	}
 
-	// Missing mapped indicator I4 (Operating Balance, index 4) — should be 0.0
-	if v, ok := dataRow[4].(float64); !ok || v != 0.0 {
-		t.Errorf("data row missing I4: expected 0.0, got %v (%T)", dataRow[4], dataRow[4])
+	// Missing mapped indicator I4 (Operating Balance, index 4) — should be nil
+	if dataRow[4] != nil {
+		t.Errorf("data row missing I4: expected nil, got %v (%T)", dataRow[4], dataRow[4])
 	}
 
 	// MTLAP (index 40) — last column

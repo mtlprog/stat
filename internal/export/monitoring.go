@@ -91,11 +91,7 @@ func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any,
 			if ind, ok := byID[col.indicatorID]; ok {
 				data[i+1] = toFloat(ind.Value)
 			} else {
-				slog.Warn("monitoring: indicator missing, writing zero",
-					"indicatorID", col.indicatorID,
-					"column", col.header,
-				)
-				data[i+1] = float64(0)
+				data[i+1] = nil
 			}
 		} else {
 			data[i+1] = col.fixedValue
@@ -105,17 +101,67 @@ func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any,
 	return headerRows, data
 }
 
+// ResetMonitoringSheet deletes the MONITORING sheet entirely and recreates it.
+// This resets all data AND formatting to a clean state.
+func (w *SheetsWriter) ResetMonitoringSheet(ctx context.Context) error {
+	spreadsheet, err := w.svc.Spreadsheets.Get(w.spreadsheetID).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("getting spreadsheet: %w", err)
+	}
+
+	for _, s := range spreadsheet.Sheets {
+		if s.Properties.Title == "MONITORING" {
+			_, err := w.svc.Spreadsheets.BatchUpdate(w.spreadsheetID, &sheets.BatchUpdateSpreadsheetRequest{
+				Requests: []*sheets.Request{{
+					DeleteSheet: &sheets.DeleteSheetRequest{SheetId: s.Properties.SheetId},
+				}},
+			}).Context(ctx).Do()
+			if err != nil {
+				return fmt.Errorf("deleting MONITORING sheet: %w", err)
+			}
+			break
+		}
+	}
+
+	return nil
+}
+
 // AppendMonitoring ensures the MONITORING sheet exists, writes header rows if the sheet
 // is new or empty, then appends one data row for the current run.
 func (w *SheetsWriter) AppendMonitoring(ctx context.Context, rows []IndicatorRow) error {
+	return w.AppendMonitoringForDate(ctx, rows, time.Now().UTC())
+}
+
+// AppendMonitoringForDate appends a MONITORING row for the given date and applies formatting.
+func (w *SheetsWriter) AppendMonitoringForDate(ctx context.Context, rows []IndicatorRow, date time.Time) error {
+	if err := w.appendMonitoringRow(ctx, rows, date); err != nil {
+		return err
+	}
+	return w.ApplyMonitoringFormatting(ctx)
+}
+
+// AppendMonitoringRowOnly appends a MONITORING row without applying formatting.
+// Use this for bulk imports, then call ApplyMonitoringFormatting once at the end.
+func (w *SheetsWriter) AppendMonitoringRowOnly(ctx context.Context, rows []IndicatorRow, date time.Time) error {
+	return w.appendMonitoringRow(ctx, rows, date)
+}
+
+// ApplyMonitoringFormatting applies visual formatting to the MONITORING sheet.
+func (w *SheetsWriter) ApplyMonitoringFormatting(ctx context.Context) error {
 	meta, err := w.ensureSheets(ctx, "MONITORING")
 	if err != nil {
 		return fmt.Errorf("ensuring MONITORING sheet: %w", err)
 	}
-	monMeta := meta["MONITORING"]
+	return w.applyMonitoringFormatting(ctx, meta["MONITORING"])
+}
 
-	now := time.Now().UTC()
-	headerRows, dataRow := buildMonitoringRows(rows, now)
+func (w *SheetsWriter) appendMonitoringRow(ctx context.Context, rows []IndicatorRow, date time.Time) error {
+	_, err := w.ensureSheets(ctx, "MONITORING")
+	if err != nil {
+		return fmt.Errorf("ensuring MONITORING sheet: %w", err)
+	}
+
+	headerRows, dataRow := buildMonitoringRows(rows, date)
 
 	existing, err := w.svc.Spreadsheets.Values.Get(
 		w.spreadsheetID, "MONITORING!A1:A2",
@@ -136,7 +182,7 @@ func (w *SheetsWriter) AppendMonitoring(ctx context.Context, rows []IndicatorRow
 	}
 
 	// Check for duplicate date to prevent double-append on same-day reruns.
-	todayStr := now.Format("02.01.2006")
+	todayStr := date.Format("02.01.2006")
 	dates, err := w.svc.Spreadsheets.Values.Get(
 		w.spreadsheetID, "MONITORING!A3:A",
 	).Context(ctx).Do()
@@ -157,10 +203,6 @@ func (w *SheetsWriter) AppendMonitoring(ctx context.Context, rows []IndicatorRow
 	).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("appending MONITORING row: %w", err)
-	}
-
-	if err := w.applyMonitoringFormatting(ctx, monMeta); err != nil {
-		return fmt.Errorf("formatting MONITORING sheet: %w", err)
 	}
 
 	return nil
