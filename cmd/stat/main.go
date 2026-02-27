@@ -580,16 +580,27 @@ func runImportExcel(c *cli.Context) error {
 	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
 
 	// Iterate day by day from lastExcelDate+1 to today.
+	const maxConsecutiveErrors = 5
+
 	now := time.Now().UTC()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	appended := 0
+	var appended, consecutiveErrors int
 
 	for d := lastExcelDate.AddDate(0, 0, 1); !d.After(today); d = d.AddDate(0, 0, 1) {
 		snap, err := snapshotRepo.GetByDate(ctx, "mtlf", d)
 		if err != nil {
-			slog.Debug("no snapshot for date", "date", d.Format("2006-01-02"))
+			if errors.Is(err, snapshot.ErrNotFound) {
+				slog.Debug("no snapshot for date", "date", d.Format("2006-01-02"))
+				continue
+			}
+			consecutiveErrors++
+			slog.Warn("database error fetching snapshot", "date", d.Format("2006-01-02"), "error", err)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive errors, last: %w", consecutiveErrors, err)
+			}
 			continue
 		}
+		consecutiveErrors = 0
 
 		var fundData domain.FundStructureData
 		if err := json.Unmarshal(snap.Data, &fundData); err != nil {
@@ -631,8 +642,11 @@ func runImportExcel(c *cli.Context) error {
 
 	latestSnap, err := snapshotRepo.GetLatest(ctx, "mtlf")
 	if err != nil {
-		slog.Warn("no snapshots found, skipping IND_ALL/IND_MAIN refresh", "error", err)
-		return nil
+		if errors.Is(err, snapshot.ErrNotFound) {
+			slog.Info("no snapshots in database, skipping IND_ALL/IND_MAIN refresh")
+			return nil
+		}
+		return fmt.Errorf("getting latest snapshot for IND_ALL/IND_MAIN refresh: %w", err)
 	}
 
 	var latestData domain.FundStructureData
@@ -672,6 +686,7 @@ func readExcelMonitoring(filePath string) ([][]any, time.Time, error) {
 
 	var allRows [][]any
 	var lastDate time.Time
+	var suppressedErrors int
 
 	for rowIdx, xlRow := range xlRows {
 		row := make([]any, totalCols)
@@ -693,17 +708,27 @@ func readExcelMonitoring(filePath string) ([][]any, time.Time, error) {
 				row[0] = t.Format("02.01.2006")
 				lastDate = t
 			} else if rowIdx >= 2 && colIdx > 0 {
-				// Data cells: convert to float where possible.
-				// Excelize formats numbers with commas (e.g. "1,827,956"), strip them.
-				row[colIdx] = parseExcelNumber(cellVal)
+				// Data cells: convert to float where possible, suppress Excel errors.
+				val := parseExcelNumber(cellVal)
+				if val == nil {
+					suppressedErrors++
+				}
+				row[colIdx] = val
 			} else {
-				// Header rows: keep as string but try to convert numbers.
+				// Header rows: convert to float where possible, keep as string otherwise.
 				row[colIdx] = parseExcelNumber(cellVal)
 			}
 		}
 		if row != nil {
 			allRows = append(allRows, row)
 		}
+	}
+
+	if suppressedErrors > 0 {
+		slog.Warn("suppressed Excel error values during import",
+			"count", suppressedErrors,
+			"explanation", "cells with # prefixes (e.g. #REF!, #DIV/0!) replaced with nil",
+		)
 	}
 
 	if lastDate.IsZero() {
@@ -733,13 +758,13 @@ func parseExcelNumber(s string) any {
 // parseExcelDate parses date strings in formats used by excelize output.
 func parseExcelDate(s string) (time.Time, error) {
 	for _, layout := range []string{
-		"01-02-06",       // excelize default for dates
-		"1/2/06",         // US short
+		"02.01.2006",     // dd.mm.yyyy — known MONITORING format
 		"2006-01-02",     // ISO
-		"02.01.2006",     // dd.mm.yyyy
-		"1/2/2006",       // US long
-		"01-02-2006",     // excelize long
 		"2006-01-02T15:04:05Z",
+		"01-02-06",       // MM-DD-YY
+		"1/2/06",         // US short
+		"1/2/2006",       // US long
+		"01-02-2006",     // MM-DD-YYYY
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
@@ -753,17 +778,20 @@ func parseExcelDate(s string) (time.Time, error) {
 func buildMonitoringHistory(excelRows [][]any) export.MonitoringHistory {
 	colIDs := export.MonitoringColumnIndicatorIDs()
 	hist := make(export.MonitoringHistory, len(excelRows))
+	var skippedNoDate, skippedParseFail, skippedNoVals int
 
 	for i, row := range excelRows {
 		if i < 2 || len(row) == 0 {
-			continue // skip header rows
+			continue // skip header rows and empty rows
 		}
 		dateStr, ok := row[0].(string)
 		if !ok {
+			skippedNoDate++
 			continue
 		}
 		t, err := time.Parse("02.01.2006", dateStr)
 		if err != nil {
+			skippedParseFail++
 			continue
 		}
 		date := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
@@ -778,7 +806,18 @@ func buildMonitoringHistory(excelRows [][]any) export.MonitoringHistory {
 		}
 		if len(vals) > 0 {
 			hist[date] = vals
+		} else {
+			skippedNoVals++
 		}
+	}
+
+	if skipped := skippedNoDate + skippedParseFail + skippedNoVals; skipped > 0 {
+		slog.Warn("buildMonitoringHistory: skipped rows",
+			"parsed", len(hist),
+			"skippedNoDate", skippedNoDate,
+			"skippedParseFail", skippedParseFail,
+			"skippedNoVals", skippedNoVals,
+		)
 	}
 
 	return hist
