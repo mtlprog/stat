@@ -18,10 +18,12 @@ go vet ./...
 
 ## Deployment Model (Railway)
 
-The binary uses `github.com/urfave/cli/v2` with three subcommands — Railway manages scheduling externally:
+The binary uses `github.com/urfave/cli/v2` with subcommands — Railway manages scheduling externally:
 - `stat serve` — long-running HTTP API server (read-only: snapshots + indicators)
 - `stat quote` — one-shot cron: fetch CoinGecko prices and store in DB (run hourly)
 - `stat report` — one-shot cron: generate snapshot + export to Google Sheets (run daily)
+- `stat import` — one-shot: import historical snapshots from old stat API into DB
+- `stat import-excel` — one-shot: import MONITORING data from Excel, append DB snapshots, refresh IND_ALL/IND_MAIN with historical changes from monitoring history
 
 The API has **no write endpoints** — snapshot generation only happens via `stat report`.
 There is no `internal/worker` package; all scheduling is external.
@@ -42,7 +44,10 @@ There is no `internal/worker` package; all scheduling is external.
 ### Google Sheets Export
 - `internal/export/sheets.go` — IND_ALL and IND_MAIN are **clear+rewrite** each run.
 - `internal/export/monitoring.go` — MONITORING sheet is **append-only** (one row per daily run via `Values.Append` with `INSERT_ROWS`).
-- `export.Service.Export` returns `([]IndicatorRow, error)` — rows are reused by `AppendMonitoring` to avoid recalculating indicators.
+- `export.Service.Export` delegates to `ExportWithHistory(ctx, data, nil)` — both return `([]IndicatorRow, error)`. Rows are reused by `AppendMonitoring` to avoid recalculating indicators.
+- `export.Service.ExportWithHistory` fills gaps in historical change data from `MonitoringHistory` when DB snapshots are unavailable (used by `import-excel`).
+- `export.MonitoringHistory` (`map[time.Time]map[int]decimal.Decimal`) — keys are midnight UTC dates, values map indicator ID → value. `NearestBefore(target)` finds the latest date ≤ target for gap-filling.
+- `export.MonitoringColumnIndicatorIDs()` exposes the indicator ID mapping from `monitoringColumns` (40 ints, 0 = unmapped). **Column order is load-bearing** — both `buildMonitoringRows` and `buildMonitoringHistory` depend on positional alignment.
 - MONITORING column mapping is in `monitoringColumns` slice — when adding new indicators, add the mapping there too.
 - All three sheets match the original `MTL_report_1.xlsx` formatting exactly:
   - **IND_ALL**: light-green `#D9EAD3` headers, bold Arial 10pt, freeze M2 (1 row + 12 cols), thin borders around change cols F–I, MAIN col L has gray `#D9D9D9` background.
@@ -86,6 +91,8 @@ path = u.Path + "?" + u.RawQuery
 - Horizon pagination errors must be returned, not swallowed — silent `break` on parse failure hides incomplete data.
 - Balance parse errors in helpers should `slog.Warn` before returning zero — distinguish "not found" from "corrupt data".
 - When one failed API call cascades to zero out multiple indicators, log the cascade explicitly (which indicators are affected and why).
+- Always distinguish `snapshot.ErrNotFound` from real DB errors using `errors.Is(err, snapshot.ErrNotFound)` — never conflate "not found" with connection/query failures (see `runImport` pattern).
+- Long loops over dates/snapshots must have a circuit breaker (`maxConsecutiveErrors = 5`) to abort on persistent failures — never silently iterate through hundreds of errors.
 
 ## Local Development with Docker
 
@@ -93,6 +100,13 @@ path = u.Path + "?" + u.RawQuery
 - Use `docker compose` for local runs: `docker compose build app && docker compose run --rm --entrypoint "./stat" app report`
 - Dockerfile ENTRYPOINT is `./stat`, CMD is `serve` — to run subcommands use `--entrypoint "./stat" app <subcommand>`.
 - `docker compose up -d db` starts just PostgreSQL; `docker compose run --rm` for one-shot commands.
+- For `import-excel` with a local file: `docker compose run --rm -v "$(pwd)/MTL_report_1.xlsx:/app/MTL_report_1.xlsx" --entrypoint "./stat" app import-excel --file MTL_report_1.xlsx`
+
+### Excel Import (`import-excel`)
+- Uses `github.com/xuri/excelize/v2` to read the MONITORING sheet from an `.xlsx` file.
+- `excelize.GetRows` returns displayed cell values as strings — numbers come formatted with commas (e.g. `"1,827,956"`), dates as locale-dependent strings.
+- Excel formula errors (`#REF!`, `#DIV/0!`, `#N/A`) are returned as literal strings — `parseExcelNumber` drops any `#`-prefixed string to nil to prevent Google Sheets from interpreting them as errors.
+- Date parsing in `parseExcelDate` prioritizes `dd.mm.yyyy` (the known MONITORING format) over ambiguous US formats to prevent silent month/day swap.
 
 ## Git Conventions
 
