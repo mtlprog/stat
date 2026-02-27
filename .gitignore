@@ -1,6 +1,6 @@
-# Binary
-stat
-stat_bin
+# Binary (root only, not cmd/stat/ source directory)
+/stat
+/stat_bin
 
 # Secrets — use .env.example as template
 .env

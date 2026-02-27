@@ -98,7 +98,7 @@ path = u.Path + "?" + u.RawQuery
 
 - **Commit messages**: Use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g., `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`)
 - **PR Merge Strategy**: Repository only allows rebase merges. Use `gh pr merge --rebase --delete-branch`
-- **gitignore quirk**: `cmd/stat` is gitignored (for the binary). Use `git add -f cmd/stat/main.go` when staging source files there.
+- **Binary output**: `go build -o stat ./cmd/stat` produces the binary at repo root; `/stat` is gitignored (not `cmd/stat/`).
 
 ## samber/lo - Utility Library
 
