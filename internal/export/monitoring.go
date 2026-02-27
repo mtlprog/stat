@@ -63,6 +63,12 @@ var monitoringColumns = []monitoringCol{
 	{header: "MTLAP", indicatorID: 40},
 }
 
+// MonitoringColumnIndicatorIDs returns the indicator ID for each of the 40 MONITORING
+// data columns (B through AO). A value of 0 means no mapped indicator at that index.
+func MonitoringColumnIndicatorIDs() []int {
+	return lo.Map(monitoringColumns, func(c monitoringCol, _ int) int { return c.indicatorID })
+}
+
 // buildMonitoringRows builds header rows and a single data row for the MONITORING sheet.
 func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any, dataRow []any) {
 	byID := lo.KeyBy(rows, func(r IndicatorRow) int { return r.ID })
@@ -129,6 +135,26 @@ func (w *SheetsWriter) DeleteMonitoringSheet(ctx context.Context) error {
 	}
 
 	slog.Info("MONITORING sheet does not exist, nothing to delete")
+	return nil
+}
+
+// WriteMonitoringBulk creates the MONITORING sheet and writes all rows (headers + data)
+// in a single API call. Use this for bulk imports from external sources like Excel.
+func (w *SheetsWriter) WriteMonitoringBulk(ctx context.Context, allRows [][]any) error {
+	_, err := w.ensureSheets(ctx, "MONITORING")
+	if err != nil {
+		return fmt.Errorf("ensuring MONITORING sheet: %w", err)
+	}
+
+	_, err = w.svc.Spreadsheets.Values.Update(
+		w.spreadsheetID,
+		"MONITORING!A1",
+		&sheets.ValueRange{Values: allRows},
+	).ValueInputOption("USER_ENTERED").Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("writing MONITORING bulk data: %w", err)
+	}
+
 	return nil
 }
 
