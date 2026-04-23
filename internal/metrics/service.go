@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -14,6 +15,7 @@ type Horizon interface {
 	FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
 	FetchAllPoolReservesForAsset(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
 	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
+	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
 }
 
 // PriceSource provides market price lookups.
@@ -76,8 +78,24 @@ func (s *Service) EnrichMetrics(ctx context.Context, data *domain.FundStructureD
 		}
 		totalDivs = totalDivs.Add(d)
 	}
-	v := totalDivs.String()
-	m.MonthlyDividends = &v
+	divV := totalDivs.String()
+	m.MonthlyDividends = &divV
+
+	// I25: EURMTL daily payment volume
+	if dailyVol, err := s.horizon.FetchEURMTLPaymentVolume(ctx, time.Now().AddDate(0, 0, -1)); err != nil {
+		slog.Warn("metrics: failed to fetch EURMTL daily volume", "error", err)
+	} else {
+		dv := dailyVol.String()
+		m.EURMTLDailyVolume = &dv
+	}
+
+	// I26: EURMTL 30d payment volume
+	if vol30d, err := s.horizon.FetchEURMTLPaymentVolume(ctx, time.Now().AddDate(0, 0, -30)); err != nil {
+		slog.Warn("metrics: failed to fetch EURMTL 30d volume", "error", err)
+	} else {
+		mv := vol30d.String()
+		m.EURMTL30dVolume = &mv
+	}
 
 	data.LiveMetrics = m
 	return nil

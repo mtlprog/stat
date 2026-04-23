@@ -27,12 +27,13 @@ func NewIndicatorHandler(snapshots *snapshot.Service, indicators *indicator.Serv
 
 // IndicatorComparison extends Indicator with optional period-over-period change data.
 type IndicatorComparison struct {
-	ID        int              `json:"id"`
-	Name      string           `json:"name"`
-	Value     decimal.Decimal  `json:"value"`
-	Unit      string           `json:"unit"`
-	ChangeAbs *decimal.Decimal `json:"change_abs,omitempty"`
-	ChangePct *decimal.Decimal `json:"change_pct,omitempty"`
+	ID          int              `json:"id"`
+	Name        string           `json:"name"`
+	Value       decimal.Decimal  `json:"value"`
+	Unit        string           `json:"unit"`
+	Description string           `json:"description,omitempty"`
+	ChangeAbs   *decimal.Decimal `json:"change_abs,omitempty"`
+	ChangePct   *decimal.Decimal `json:"change_pct,omitempty"`
 }
 
 // GetIndicators handles GET /api/v1/indicators — latest snapshot indicators.
@@ -80,10 +81,11 @@ func (h *IndicatorHandler) GetIndicators(w http.ResponseWriter, r *http.Request)
 	result := make([]IndicatorComparison, len(indicators))
 	for i, ind := range indicators {
 		comp := IndicatorComparison{
-			ID:    ind.ID,
-			Name:  ind.Name,
-			Value: ind.Value,
-			Unit:  ind.Unit,
+			ID:          ind.ID,
+			Name:        ind.Name,
+			Value:       ind.Value,
+			Unit:        ind.Unit,
+			Description: ind.Description,
 		}
 		if hist, ok := historicalMap[ind.ID]; ok && !hist.Value.IsZero() {
 			changeAbs := ind.Value.Sub(hist.Value)

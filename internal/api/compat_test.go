@@ -18,10 +18,11 @@ func testFundData() domain.FundStructureData {
 			{ID: "GISSUER", Name: "ISSUER", Type: domain.AccountTypeIssuer, TotalEURMTL: decimal.NewFromInt(100)},
 		},
 		MutualFunds: []domain.FundAccountPortfolio{
-			{ID: "GMUTUAL", Name: "MFB", Type: domain.AccountTypeMutual, TotalEURMTL: decimal.NewFromInt(50)},
+			{ID: "GMUTUAL", Name: "APART", Type: domain.AccountTypeMutual, TotalEURMTL: decimal.NewFromInt(50)},
 		},
 		OtherAccounts: []domain.FundAccountPortfolio{
 			{ID: "GOTHER", Name: "LABR", Type: domain.AccountTypeOther, TotalEURMTL: decimal.NewFromInt(10)},
+			{ID: "GMFB", Name: "MFB", Type: domain.AccountTypeOther, TotalEURMTL: decimal.NewFromInt(30)},
 		},
 		AggregatedTotals: domain.AggregatedTotals{
 			TotalEURMTL:  decimal.NewFromInt(100),
@@ -127,8 +128,8 @@ func TestGetFundStructureCompatLatest(t *testing.T) {
 
 	// Verify otherAccounts present.
 	others, ok := result["otherAccounts"].([]any)
-	if !ok || len(others) != 1 {
-		t.Error("expected 1 otherAccount")
+	if !ok || len(others) != 2 {
+		t.Error("expected 2 otherAccounts")
 	}
 
 	// Verify aggregatedTotals present.

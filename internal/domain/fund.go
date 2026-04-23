@@ -31,6 +31,8 @@ type FundLiveMetrics struct {
 	MTLCirculation     *string `json:"mtl_circulation,omitempty"`
 	MTLRECTCirculation *string `json:"mtlrect_circulation,omitempty"`
 	MonthlyDividends   *string `json:"monthly_dividends,omitempty"`
+	EURMTLDailyVolume  *string `json:"eurmtl_daily_volume,omitempty"`
+	EURMTL30dVolume    *string `json:"eurmtl_30d_volume,omitempty"`
 }
 
 // FundStructureData is the top-level output of the fund aggregation pipeline.
