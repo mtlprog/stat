@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -102,8 +103,10 @@ func TestAnalyticsCalculatorZeroPriceYearAgo(t *testing.T) {
 }
 
 type mockTokenomicsHorizon struct {
-	holders    map[string]int
-	holderIDs  map[string][]string
+	holders         map[string]int
+	holderIDs       map[string][]string
+	holderBalances  map[string]map[string]decimal.Decimal // asset code → account_id → balance
+	paymentVolume   decimal.Decimal
 }
 
 func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
@@ -120,6 +123,17 @@ func (m *mockTokenomicsHorizon) FetchAssetHolderIDsByBalance(_ context.Context, 
 	return nil, nil
 }
 
+func (m *mockTokenomicsHorizon) FetchAssetHolderBalancesByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (map[string]decimal.Decimal, error) {
+	if bals, ok := m.holderBalances[asset.Code]; ok {
+		return bals, nil
+	}
+	return nil, nil
+}
+
+func (m *mockTokenomicsHorizon) FetchEURMTLPaymentVolume(_ context.Context, _ time.Time) (decimal.Decimal, error) {
+	return m.paymentVolume, nil
+}
+
 func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 	calc := &TokenomicsCalculator{
 		Horizon: &mockTokenomicsHorizon{
@@ -131,6 +145,18 @@ func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 				"MTL":     {"A", "B", "C"},
 				"MTLRECT": {"B", "C", "D"},
 			},
+			holderBalances: map[string]map[string]decimal.Decimal{
+				"MTL": {
+					"A": decimal.NewFromInt(100),
+					"B": decimal.NewFromInt(200),
+					"C": decimal.NewFromInt(300),
+				},
+				"MTLRECT": {
+					"B": decimal.NewFromInt(50),
+					"D": decimal.NewFromInt(150),
+				},
+			},
+			paymentVolume: decimal.NewFromInt(5000),
 		},
 	}
 
@@ -168,6 +194,19 @@ func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 	// I40: MTLAP holders
 	if !indicatorMap[40].Value.Equal(decimal.NewFromInt(42)) {
 		t.Errorf("I40 = %s, want 42", indicatorMap[40].Value)
+	}
+	// I23: Median shareholding — per-holder merged: A=100, B=250, C=300, D=150
+	// sorted [100, 150, 250, 300] → median = (150+250)/2 = 200
+	if !indicatorMap[23].Value.Equal(decimal.NewFromInt(200)) {
+		t.Errorf("I23 = %s, want 200 (median of per-holder merged MTL+MTLRECT balances)", indicatorMap[23].Value)
+	}
+	// I25: EURMTL daily volume = 5000 (from mock)
+	if !indicatorMap[25].Value.Equal(decimal.NewFromInt(5000)) {
+		t.Errorf("I25 = %s, want 5000", indicatorMap[25].Value)
+	}
+	// I26: EURMTL 30d volume = 5000 (from mock, same call)
+	if !indicatorMap[26].Value.Equal(decimal.NewFromInt(5000)) {
+		t.Errorf("I26 = %s, want 5000", indicatorMap[26].Value)
 	}
 }
 

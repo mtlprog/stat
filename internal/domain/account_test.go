@@ -25,8 +25,8 @@ func TestMainAccounts(t *testing.T) {
 
 func TestMutualAccounts(t *testing.T) {
 	mutual := MutualAccounts()
-	if got := len(mutual); got != 2 {
-		t.Errorf("MutualAccounts() returned %d, want 2", got)
+	if got := len(mutual); got != 1 {
+		t.Errorf("MutualAccounts() returned %d, want 1", got)
 	}
 
 	for _, a := range mutual {
@@ -38,8 +38,8 @@ func TestMutualAccounts(t *testing.T) {
 
 func TestOtherAccounts(t *testing.T) {
 	other := OtherAccounts()
-	if got := len(other); got != 3 {
-		t.Errorf("OtherAccounts() returned %d, want 3", got)
+	if got := len(other); got != 4 {
+		t.Errorf("OtherAccounts() returned %d, want 4", got)
 	}
 
 	for _, a := range other {
@@ -128,9 +128,9 @@ func TestAccountTypeCounts(t *testing.T) {
 	expected := map[AccountType]int{
 		AccountTypeIssuer:      1,
 		AccountTypeSubfond:     4,
-		AccountTypeMutual:      2,
+		AccountTypeMutual:      1,
 		AccountTypeOperational: 1,
-		AccountTypeOther:       3,
+		AccountTypeOther:       4,
 	}
 
 	for typ, want := range expected {

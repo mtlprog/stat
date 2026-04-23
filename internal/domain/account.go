@@ -25,13 +25,13 @@ type FundAccount struct {
 
 // accountRegistry holds all fund accounts. Unexported to prevent external mutation.
 var accountRegistry = []FundAccount{
-	// 8 non-other accounts (1 issuer + 4 subfond + 1 operational + 2 mutual)
+	// 7 non-other accounts (1 issuer + 4 subfond + 1 operational + 1 mutual)
 	{Name: "MAIN ISSUER", Type: AccountTypeIssuer, Address: IssuerAddress, Description: "Main token issuer account"},
 	{Name: "MABIZ", Type: AccountTypeSubfond, Address: "GAQ5ERJVI6IW5UVNPEVXUUVMXH3GCDHJ4BJAXMAAKPR5VBWWAUOMABIZ", Description: "Sub-fund for business investments"},
 	{Name: "MCITY", Type: AccountTypeSubfond, Address: "GCOJHUKGHI6IATN7AIEK4PSNBPXIAIZ7KB2AWTTUCNIAYVPUB2DMCITY", Description: "Sub-fund for city development"},
 	{Name: "DEFI", Type: AccountTypeSubfond, Address: "GAEZHXMFRW2MWLWCXSBNZNUSE6SN3ODZDDOMPFH3JPMJXN4DKBPMDEFI", Description: "Sub-fund for DeFi operations"},
 	{Name: "BOSS", Type: AccountTypeSubfond, Address: "GC72CB75VWW7CLGXS76FGN3CC5K7EELDAQCPXYMZLNMOTC42U3XJBOSS", Description: "Sub-fund for management"},
-	{Name: "MFB", Type: AccountTypeMutual, Address: "GCKCV7T56CAPFUYMCQUYSEUMZRC7GA7CAQ2BOL3RPS4NQXDTRCSULMFB", Description: "Mutual fund account"},
+	{Name: "MFB", Type: AccountTypeOther, Address: "GCKCV7T56CAPFUYMCQUYSEUMZRC7GA7CAQ2BOL3RPS4NQXDTRCSULMFB", Description: "Mutual fund account"},
 	{Name: "APART", Type: AccountTypeMutual, Address: "GD2SNF4QHUJD6VRAXWDA4CDUYENYB23YDFQ74DVC4P5SYR54AAVCUMFA", Description: "Mutual fund apartment account"},
 	{Name: "ADMIN", Type: AccountTypeOperational, Address: "GBSCMGJCE4DLQ6TYRNUMXUZZUXGZBM4BXVZUIHBBL5CSRRW2GWEHUADM", Description: "Operations and administration"},
 	// 3 other accounts

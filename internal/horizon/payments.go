@@ -116,3 +116,61 @@ func (c *Client) FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string
 
 	return total, nil
 }
+
+// FetchEURMTLPaymentVolume returns the total volume of all EURMTL payments
+// within the given time window (from since to now). It queries the Horizon
+// /payments endpoint filtered by asset. Both payment and path_payment types
+// are counted.
+func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error) {
+	eurmtl := domain.EURMTLAsset()
+
+	total := decimal.Zero
+	path := fmt.Sprintf("/payments?asset_code=%s&asset_issuer=%s&order=desc&limit=200",
+		eurmtl.Code, eurmtl.Issuer)
+
+	for path != "" {
+		var resp horizonOperationsResponse
+		if err := c.getJSON(ctx, path, &resp); err != nil {
+			return decimal.Zero, fmt.Errorf("fetching EURMTL payments: %w", err)
+		}
+
+		done := false
+		for _, op := range resp.Embedded.Records {
+			t, err := time.Parse(time.RFC3339, op.CreatedAt)
+			if err != nil {
+				continue
+			}
+			if t.Before(since) {
+				done = true
+				break
+			}
+
+			if op.Type != "payment" && op.Type != "path_payment_strict_send" && op.Type != "path_payment_strict_receive" {
+				continue
+			}
+			if op.AssetCode != eurmtl.Code || op.AssetIssuer != eurmtl.Issuer {
+				continue
+			}
+
+			amt, err := decimal.NewFromString(op.Amount)
+			if err != nil {
+				continue
+			}
+			total = total.Add(amt)
+		}
+
+		if done || len(resp.Embedded.Records) == 0 || resp.Links.Next.Href == "" {
+			break
+		}
+
+		u, err := url.Parse(resp.Links.Next.Href)
+		if err != nil {
+			slog.Warn("failed to parse Horizon pagination link, results may be incomplete",
+				"href", resp.Links.Next.Href, "error", err)
+			break
+		}
+		path = u.Path + "?" + u.RawQuery
+	}
+
+	return total, nil
+}

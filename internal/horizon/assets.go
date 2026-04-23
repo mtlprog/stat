@@ -159,6 +159,23 @@ func (c *Client) FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.
 	return ids, err
 }
 
+// FetchAssetHolderBalancesByBalance returns a map of account_id → balance for all
+// accounts whose balance of the given asset is >= minBalance.
+func (c *Client) FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error) {
+	if asset.IsNative() {
+		return nil, fmt.Errorf("cannot query holders for native asset")
+	}
+
+	balances := make(map[string]decimal.Decimal)
+	err := c.paginateAccounts(ctx, asset, func(rec horizonAccountRecord) bool {
+		if bal, ok := accountBalanceForAsset(rec, asset); ok && bal.GreaterThanOrEqual(minBalance) {
+			balances[rec.AccountID] = bal
+		}
+		return true
+	})
+	return balances, err
+}
+
 // FetchAssetAmount returns the total issued amount of the given asset.
 func (c *Client) FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error) {
 	if asset.IsNative() {
