@@ -88,3 +88,8 @@ func (s *Service) GetNearestBefore(ctx context.Context, slug string, date time.T
 func (s *Service) List(ctx context.Context, slug string, limit int) ([]Snapshot, error) {
 	return s.repo.List(ctx, slug, limit)
 }
+
+// ListMeta retrieves all snapshot metadata (date + createdAt) without the data payload.
+func (s *Service) ListMeta(ctx context.Context, slug string) ([]SnapshotMeta, error) {
+	return s.repo.ListMeta(ctx, slug)
+}

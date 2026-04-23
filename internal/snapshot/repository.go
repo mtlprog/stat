@@ -23,6 +23,12 @@ type Snapshot struct {
 	CreatedAt    time.Time       `json:"createdAt"`
 }
 
+// SnapshotMeta holds snapshot metadata without the data payload.
+type SnapshotMeta struct {
+	SnapshotDate time.Time `json:"date"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
 // Repository defines persistent storage for snapshots.
 type Repository interface {
 	Save(ctx context.Context, entityID int, date time.Time, data json.RawMessage) error
@@ -30,6 +36,7 @@ type Repository interface {
 	GetByDate(ctx context.Context, entitySlug string, date time.Time) (*Snapshot, error)
 	GetNearestBefore(ctx context.Context, entitySlug string, date time.Time) (*Snapshot, error)
 	List(ctx context.Context, entitySlug string, limit int) ([]Snapshot, error)
+	ListMeta(ctx context.Context, entitySlug string) ([]SnapshotMeta, error)
 	GetEntityID(ctx context.Context, slug string) (int, error)
 	EnsureEntity(ctx context.Context, slug, name, description string) (int, error)
 }
@@ -139,6 +146,32 @@ func (r *PgRepository) List(ctx context.Context, entitySlug string, limit int) (
 		return nil, fmt.Errorf("iterating snapshots: %w", err)
 	}
 	return snapshots, nil
+}
+
+func (r *PgRepository) ListMeta(ctx context.Context, entitySlug string) ([]SnapshotMeta, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT fs.snapshot_date, fs.created_at
+		 FROM fund_snapshots fs
+		 JOIN fund_entities fe ON fe.id = fs.entity_id
+		 WHERE fe.slug = $1
+		 ORDER BY fs.snapshot_date DESC`, entitySlug)
+	if err != nil {
+		return nil, fmt.Errorf("listing snapshot meta: %w", err)
+	}
+	defer rows.Close()
+
+	var metas []SnapshotMeta
+	for rows.Next() {
+		var m SnapshotMeta
+		if err := rows.Scan(&m.SnapshotDate, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning snapshot meta: %w", err)
+		}
+		metas = append(metas, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating snapshot meta: %w", err)
+	}
+	return metas, nil
 }
 
 func (r *PgRepository) GetEntityID(ctx context.Context, slug string) (int, error) {
