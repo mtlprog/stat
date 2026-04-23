@@ -9,6 +9,21 @@ import (
 	"github.com/mtlprog/stat/internal/static"
 )
 
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // NewServer creates an HTTP server with all routes configured.
 func NewServer(port string, snapshots *snapshot.Service, indicators *indicator.Service) *http.Server {
 	handler := NewHandler(snapshots)
@@ -34,7 +49,7 @@ func NewServer(port string, snapshots *snapshot.Service, indicators *indicator.S
 
 	return &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      corsMiddleware(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
