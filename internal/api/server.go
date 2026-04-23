@@ -22,6 +22,10 @@ func NewServer(port string, snapshots *snapshot.Service, indicators *indicator.S
 	mux.HandleFunc("GET /api/v1/snapshots/{date}", handler.GetSnapshotByDate)
 	mux.HandleFunc("GET /api/v1/snapshots", handler.ListSnapshots)
 
+	// Legacy endpoints for dreadnought frontend compatibility.
+	mux.HandleFunc("GET /api/snapshots", handler.ListSnapshotsCompat)
+	mux.HandleFunc("GET /api/fund-structure", handler.GetFundStructureCompat)
+
 	if indicators != nil {
 		indHandler := NewIndicatorHandler(snapshots, indicators)
 		mux.HandleFunc("GET /api/v1/indicators", indHandler.GetIndicators)
