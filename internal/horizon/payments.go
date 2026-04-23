@@ -119,8 +119,8 @@ func (c *Client) FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string
 
 // FetchEURMTLPaymentVolume returns the total volume of all EURMTL payments
 // within the given time window (from since to now). It queries the Horizon
-// /payments endpoint filtered by asset. Both payment and path_payment types
-// are counted.
+// /payments endpoint and filters by asset client-side. Both payment and
+// path_payment types are counted.
 func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error) {
 	eurmtl := domain.EURMTLAsset()
 
@@ -138,6 +138,8 @@ func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) 
 		for _, op := range resp.Embedded.Records {
 			t, err := time.Parse(time.RFC3339, op.CreatedAt)
 			if err != nil {
+				slog.Warn("skipping payment with unparseable timestamp",
+					"created_at", op.CreatedAt, "type", op.Type, "error", err)
 				continue
 			}
 			if t.Before(since) {
@@ -154,6 +156,9 @@ func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) 
 
 			amt, err := decimal.NewFromString(op.Amount)
 			if err != nil {
+				slog.Warn("skipping payment with unparseable amount",
+					"amount", op.Amount, "asset", op.AssetCode,
+					"created_at", op.CreatedAt, "error", err)
 				continue
 			}
 			total = total.Add(amt)
@@ -165,9 +170,7 @@ func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) 
 
 		u, err := url.Parse(resp.Links.Next.Href)
 		if err != nil {
-			slog.Warn("failed to parse Horizon pagination link, results may be incomplete",
-				"href", resp.Links.Next.Href, "error", err)
-			break
+			return decimal.Zero, fmt.Errorf("parsing Horizon pagination link %q: %w", resp.Links.Next.Href, err)
 		}
 		path = u.Path + "?" + u.RawQuery
 	}

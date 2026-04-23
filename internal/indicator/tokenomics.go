@@ -15,10 +15,9 @@ type TokenomicsCalculator struct {
 	Horizon TokenomicsHorizon
 }
 
-// TokenomicsHorizon provides access to Horizon for balance-filtered holder counts, IDs, balances, and volumes.
+// TokenomicsHorizon provides access to Horizon for balance-filtered holder counts, balances, and volumes.
 type TokenomicsHorizon interface {
 	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
-	FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) ([]string, error)
 	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
 	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
 }
@@ -44,34 +43,52 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 		}
 	}
 
-	// I27: Accounts holding >= 1 MTL or >= 1 MTLRECT (union to avoid double-counting)
+	// Fetch holder balances once for both I27 (count) and I23 (median).
+	// FetchAssetHolderBalancesByBalance returns map[account_id]balance, so we get
+	// both IDs and balances in a single pair of Horizon pagination sweeps.
+	var mergedHolders map[string]decimal.Decimal
 	i27 := decimal.Zero
+	i23 := decimal.Zero
 	if c.Horizon != nil {
 		mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
 		mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
 
-		mtlIDs, err1 := c.Horizon.FetchAssetHolderIDsByBalance(ctx, mtlAsset, minOne)
+		mtlBalances, err1 := c.Horizon.FetchAssetHolderBalancesByBalance(ctx, mtlAsset, minOne)
 		if err1 != nil {
-			slog.Warn("failed to fetch MTL holder IDs", "error", err1)
+			slog.Warn("failed to fetch MTL holder balances", "error", err1)
 		}
 
-		mtlrectIDs, err2 := c.Horizon.FetchAssetHolderIDsByBalance(ctx, mtlrectAsset, minOne)
+		mtlrectBalances, err2 := c.Horizon.FetchAssetHolderBalancesByBalance(ctx, mtlrectAsset, minOne)
 		if err2 != nil {
-			slog.Warn("failed to fetch MTLRECT holder IDs", "error", err2)
+			slog.Warn("failed to fetch MTLRECT holder balances", "error", err2)
 		}
 
 		if err1 != nil || err2 != nil {
-			slog.Warn("I27/I21/I22 will be zero due to failed Horizon calls",
+			slog.Warn("I23/I27/I21/I22 will be zero due to failed Horizon calls",
 				"mtl_error", err1, "mtlrect_error", err2)
 		} else {
-			holderSet := make(map[string]struct{}, len(mtlIDs)+len(mtlrectIDs))
-			for _, id := range mtlIDs {
-				holderSet[id] = struct{}{}
+			// Merge by account ID: each holder's total = MTL balance + MTLRECT balance
+			mergedHolders = make(map[string]decimal.Decimal, len(mtlBalances)+len(mtlrectBalances))
+			for id, bal := range mtlBalances {
+				mergedHolders[id] = bal
 			}
-			for _, id := range mtlrectIDs {
-				holderSet[id] = struct{}{}
+			for id, bal := range mtlrectBalances {
+				mergedHolders[id] = mergedHolders[id].Add(bal)
 			}
-			i27 = decimal.NewFromInt(int64(len(holderSet)))
+
+			// I27: count of unique holders
+			i27 = decimal.NewFromInt(int64(len(mergedHolders)))
+
+			// I23: median of merged shareholdings
+			// Note: minBalance is applied per-asset, not on the merged total.
+			// An account must hold >= minBalance of at least one asset to be included.
+			if len(mergedHolders) > 0 {
+				values := make([]decimal.Decimal, 0, len(mergedHolders))
+				for _, bal := range mergedHolders {
+					values = append(values, bal)
+				}
+				i23 = Median(values)
+			}
 		}
 	}
 
@@ -88,12 +105,6 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 	i22 := decimal.Zero
 	if !i27.IsZero() {
 		i22 = i1.Div(i27)
-	}
-
-	// I23: Median shareholding size — median balance across union of MTL+MTLRECT holders (>= 1)
-	i23 := decimal.Zero
-	if c.Horizon != nil {
-		i23 = c.fetchMedianShareholding(ctx, minOne)
 	}
 
 	// I25: EURMTL daily payment volume — prefer stored value, fall back to live Horizon
@@ -146,44 +157,4 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 		NewIndicator(27, i27, "", ""),
 		NewIndicator(40, i40, "", ""),
 	}, nil
-}
-
-// fetchMedianShareholding computes the median shareholding across the union of
-// MTL and MTLRECT holders with balance >= minBalance. Each holder's total is
-// the sum of their MTL + MTLRECT balances, merged by account ID.
-func (c *TokenomicsCalculator) fetchMedianShareholding(ctx context.Context, minBalance decimal.Decimal) decimal.Decimal {
-	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
-	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
-
-	mtlBalances, err1 := c.Horizon.FetchAssetHolderBalancesByBalance(ctx, mtlAsset, minBalance)
-	if err1 != nil {
-		slog.Warn("failed to fetch MTL holder balances for I23", "error", err1)
-		return decimal.Zero
-	}
-
-	mtlrectBalances, err2 := c.Horizon.FetchAssetHolderBalancesByBalance(ctx, mtlrectAsset, minBalance)
-	if err2 != nil {
-		slog.Warn("failed to fetch MTLRECT holder balances for I23", "error", err2)
-		return decimal.Zero
-	}
-
-	// Merge by account ID: each holder's total = MTL balance + MTLRECT balance
-	merged := make(map[string]decimal.Decimal, len(mtlBalances)+len(mtlrectBalances))
-	for id, bal := range mtlBalances {
-		merged[id] = bal
-	}
-	for id, bal := range mtlrectBalances {
-		merged[id] = merged[id].Add(bal)
-	}
-
-	if len(merged) == 0 {
-		return decimal.Zero
-	}
-
-	values := make([]decimal.Decimal, 0, len(merged))
-	for _, bal := range merged {
-		values = append(values, bal)
-	}
-
-	return Median(values)
 }

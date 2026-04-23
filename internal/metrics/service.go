@@ -36,7 +36,7 @@ func NewService(h Horizon, p PriceSource, fundAddrs []string) *Service {
 	return &Service{horizon: h, price: p, fundAddrs: fundAddrs}
 }
 
-// EnrichMetrics computes I10, I6, I7, and I11 and stores them in data.LiveMetrics.
+// EnrichMetrics computes I10, I6, I7, I11, I25, and I26 and stores them in data.LiveMetrics.
 // Errors are logged and skipped; partial metrics are still stored.
 func (s *Service) EnrichMetrics(ctx context.Context, data *domain.FundStructureData) error {
 	m := &domain.FundLiveMetrics{}

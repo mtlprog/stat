@@ -103,10 +103,9 @@ func TestAnalyticsCalculatorZeroPriceYearAgo(t *testing.T) {
 }
 
 type mockTokenomicsHorizon struct {
-	holders         map[string]int
-	holderIDs       map[string][]string
-	holderBalances  map[string]map[string]decimal.Decimal // asset code → account_id → balance
-	paymentVolume   decimal.Decimal
+	holders        map[string]int
+	holderBalances map[string]map[string]decimal.Decimal // asset code → account_id → balance
+	paymentVolume  decimal.Decimal
 }
 
 func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
@@ -114,13 +113,6 @@ func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context
 		return count, nil
 	}
 	return 0, nil
-}
-
-func (m *mockTokenomicsHorizon) FetchAssetHolderIDsByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) ([]string, error) {
-	if ids, ok := m.holderIDs[asset.Code]; ok {
-		return ids, nil
-	}
-	return nil, nil
 }
 
 func (m *mockTokenomicsHorizon) FetchAssetHolderBalancesByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (map[string]decimal.Decimal, error) {
@@ -140,10 +132,6 @@ func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 			holders: map[string]int{
 				"EURMTL": 150,
 				"MTLAP":  42,
-			},
-			holderIDs: map[string][]string{
-				"MTL":     {"A", "B", "C"},
-				"MTLRECT": {"B", "C", "D"},
 			},
 			holderBalances: map[string]map[string]decimal.Decimal{
 				"MTL": {
@@ -207,6 +195,47 @@ func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
 	// I26: EURMTL 30d volume = 5000 (from mock, same call)
 	if !indicatorMap[26].Value.Equal(decimal.NewFromInt(5000)) {
 		t.Errorf("I26 = %s, want 5000", indicatorMap[26].Value)
+	}
+}
+
+func TestTokenomicsCalculatorLiveMetricsPreferred(t *testing.T) {
+	calc := &TokenomicsCalculator{
+		Horizon: &mockTokenomicsHorizon{
+			paymentVolume: decimal.NewFromInt(9999), // should NOT be used
+		},
+	}
+
+	deps := map[int]Indicator{
+		1: {ID: 1, Value: decimal.NewFromInt(85000)},
+		5: {ID: 5, Value: decimal.NewFromInt(10000)},
+	}
+
+	dailyVol := "1234.56"
+	vol30d := "56789.01"
+	data := domain.FundStructureData{
+		LiveMetrics: &domain.FundLiveMetrics{
+			EURMTLDailyVolume: &dailyVol,
+			EURMTL30dVolume:   &vol30d,
+		},
+	}
+
+	indicators, err := calc.Calculate(context.Background(), data, deps, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	indicatorMap := make(map[int]Indicator)
+	for _, ind := range indicators {
+		indicatorMap[ind.ID] = ind
+	}
+
+	// I25: should use stored value, not Horizon mock
+	if !indicatorMap[25].Value.Equal(decimal.RequireFromString("1234.56")) {
+		t.Errorf("I25 = %s, want 1234.56 (from LiveMetrics, not Horizon)", indicatorMap[25].Value)
+	}
+	// I26: should use stored value, not Horizon mock
+	if !indicatorMap[26].Value.Equal(decimal.RequireFromString("56789.01")) {
+		t.Errorf("I26 = %s, want 56789.01 (from LiveMetrics, not Horizon)", indicatorMap[26].Value)
 	}
 }
 
@@ -298,6 +327,9 @@ func TestNewIndicatorUsesRegistry(t *testing.T) {
 	}
 	if ind.Unit != "EURMTL" {
 		t.Errorf("Unit = %q, want 'EURMTL' from registry", ind.Unit)
+	}
+	if ind.Description == "" {
+		t.Error("Description should be populated from registry, got empty string")
 	}
 }
 
