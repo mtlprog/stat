@@ -377,3 +377,78 @@ func TestFetchAssetHolderIDsByBalanceFilters(t *testing.T) {
 		t.Errorf("ids = %v, want [B C]", ids)
 	}
 }
+
+// --- FetchAssetHolderBalancesByBalance tests ---
+
+func TestFetchAssetHolderBalancesByBalanceNativeRejected(t *testing.T) {
+	client := NewClient("http://unused", 1, 10*time.Millisecond)
+	_, err := client.FetchAssetHolderBalancesByBalance(context.Background(), domain.XLMAsset(), decimal.NewFromInt(1))
+	if err == nil {
+		t.Fatal("expected error for native asset")
+	}
+}
+
+func TestFetchAssetHolderBalancesByBalanceFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"_links": {"next": {"href": ""}},
+			"_embedded": {
+				"records": [
+					{
+						"account_id": "A",
+						"balances": [{"asset_code": "MTL", "asset_issuer": "GISSUER", "balance": "0.5000000"}]
+					},
+					{
+						"account_id": "B",
+						"balances": [{"asset_code": "MTL", "asset_issuer": "GISSUER", "balance": "2.0000000"}]
+					},
+					{
+						"account_id": "C",
+						"balances": [{"asset_code": "MTL", "asset_issuer": "GISSUER", "balance": "10.0000000"}]
+					}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	asset := domain.AssetInfo{Code: "MTL", Issuer: "GISSUER"}
+
+	balances, err := client.FetchAssetHolderBalancesByBalance(context.Background(), asset, decimal.NewFromInt(1))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(balances) != 2 {
+		t.Fatalf("got %d entries, want 2 (B and C)", len(balances))
+	}
+	if !balances["B"].Equal(decimal.RequireFromString("2")) {
+		t.Errorf("B balance = %s, want 2", balances["B"])
+	}
+	if !balances["C"].Equal(decimal.RequireFromString("10")) {
+		t.Errorf("C balance = %s, want 10", balances["C"])
+	}
+}
+
+func TestFetchAssetHolderBalancesByBalanceEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"_links": {"next": {"href": ""}},
+			"_embedded": {"records": []}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	asset := domain.AssetInfo{Code: "MTL", Issuer: "GISSUER"}
+
+	balances, err := client.FetchAssetHolderBalancesByBalance(context.Background(), asset, decimal.NewFromInt(1))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(balances) != 0 {
+		t.Errorf("got %d entries, want 0", len(balances))
+	}
+}

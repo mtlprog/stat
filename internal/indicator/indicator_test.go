@@ -139,7 +139,9 @@ func testFundStructureData() domain.FundStructureData {
 		},
 		MutualFunds: []domain.FundAccountPortfolio{
 			{Name: "APART", Type: domain.AccountTypeMutual, TotalEURMTL: decimal.NewFromInt(15000)},
-			{Name: "MFB", Type: domain.AccountTypeMutual, TotalEURMTL: decimal.NewFromInt(8000)},
+		},
+		OtherAccounts: []domain.FundAccountPortfolio{
+			{Name: "MFB", Type: domain.AccountTypeOther, TotalEURMTL: decimal.NewFromInt(8000)},
 		},
 		AggregatedTotals: domain.AggregatedTotals{
 			TotalEURMTL:  decimal.NewFromInt(100000),
