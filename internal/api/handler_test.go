@@ -16,6 +16,7 @@ type mockSnapshotRepo struct {
 	snapshots     []snapshot.Snapshot
 	entityID      int
 	lastListLimit int
+	metas         []snapshot.SnapshotMeta
 }
 
 func (m *mockSnapshotRepo) Save(_ context.Context, _ int, _ time.Time, _ json.RawMessage) error {
@@ -61,6 +62,17 @@ func (m *mockSnapshotRepo) GetEntityID(_ context.Context, _ string) (int, error)
 
 func (m *mockSnapshotRepo) EnsureEntity(_ context.Context, _, _, _ string) (int, error) {
 	return m.entityID, nil
+}
+
+func (m *mockSnapshotRepo) ListMeta(_ context.Context, _ string) ([]snapshot.SnapshotMeta, error) {
+	if m.metas != nil {
+		return m.metas, nil
+	}
+	metas := make([]snapshot.SnapshotMeta, len(m.snapshots))
+	for i, s := range m.snapshots {
+		metas[i] = snapshot.SnapshotMeta{SnapshotDate: s.SnapshotDate, CreatedAt: s.CreatedAt}
+	}
+	return metas, nil
 }
 
 type mockFundService struct{}

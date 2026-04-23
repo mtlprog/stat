@@ -5,17 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/mtlprog/stat/internal/domain"
 	"github.com/mtlprog/stat/internal/snapshot"
 )
-
-// compatSnapshotEntry is the response format for GET /api/snapshots (legacy).
-type compatSnapshotEntry struct {
-	Date      time.Time `json:"date"`
-	CreatedAt time.Time `json:"createdAt"`
-}
 
 // compatFundStructure is the response format for GET /api/fund-structure (legacy).
 // It merges Accounts + MutualFunds into a single Accounts slice and omits
@@ -28,21 +23,13 @@ type compatFundStructure struct {
 
 // ListSnapshotsCompat handles GET /api/snapshots (legacy).
 func (h *Handler) ListSnapshotsCompat(w http.ResponseWriter, r *http.Request) {
-	snapshots, err := h.snapshots.List(r.Context(), "mtlf", 10000)
+	metas, err := h.snapshots.ListMeta(r.Context(), "mtlf")
 	if err != nil {
 		slog.Error("failed to list snapshots (compat)", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-
-	entries := make([]compatSnapshotEntry, len(snapshots))
-	for i, s := range snapshots {
-		entries[i] = compatSnapshotEntry{
-			Date:      s.SnapshotDate,
-			CreatedAt: s.CreatedAt,
-		}
-	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, metas)
 }
 
 // GetFundStructureCompat handles GET /api/fund-structure (legacy).
@@ -75,13 +62,13 @@ func (h *Handler) GetFundStructureCompat(w http.ResponseWriter, r *http.Request)
 
 	var data domain.FundStructureData
 	if err := json.Unmarshal(s.Data, &data); err != nil {
-		slog.Error("failed to unmarshal snapshot data (compat)", "error", err)
+		slog.Error("failed to unmarshal snapshot data (compat)", "snapshot_id", s.ID, "date", s.SnapshotDate, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	compat := compatFundStructure{
-		Accounts:         append(data.Accounts, data.MutualFunds...),
+		Accounts:         slices.Concat(data.Accounts, data.MutualFunds),
 		OtherAccounts:    data.OtherAccounts,
 		AggregatedTotals: data.AggregatedTotals,
 	}

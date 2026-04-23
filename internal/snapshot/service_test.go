@@ -72,6 +72,14 @@ func (m *mockRepo) EnsureEntity(_ context.Context, _, _, _ string) (int, error) 
 	return m.entityID, m.entityErr
 }
 
+func (m *mockRepo) ListMeta(_ context.Context, _ string) ([]SnapshotMeta, error) {
+	metas := make([]SnapshotMeta, len(m.list))
+	for i, s := range m.list {
+		metas[i] = SnapshotMeta{SnapshotDate: s.SnapshotDate, CreatedAt: s.CreatedAt}
+	}
+	return metas, m.listErr
+}
+
 func TestGenerateSuccess(t *testing.T) {
 	fundData := domain.FundStructureData{
 		AggregatedTotals: domain.AggregatedTotals{AccountCount: 3},
