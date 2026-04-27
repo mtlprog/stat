@@ -43,6 +43,8 @@ The binary uses `github.com/urfave/cli/v2` with subcommands — Railway manages 
 - `stat report` — one-shot cron: generate snapshot + export to Google Sheets (run daily)
 - `stat import` — one-shot: import historical snapshots from old stat API into DB
 - `stat import-excel` — one-shot: import MONITORING data from Excel, append DB snapshots, refresh IND_ALL/IND_MAIN with historical changes from monitoring history
+- `stat import-indicators-from-sheets` — one-shot: read MONITORING tab from Google Sheets and seed `fund_indicators` for IDs in the `monitoringColumns` mapping (history goes back to whatever's in the sheet, ~2023-12-19 in prod)
+- `stat backfill-indicators` — one-shot: recompute `indicator.DeterministicIDs` for every existing snapshot (Layer 0 + I3, I4 from JSONB only)
 
 The API has **no write endpoints** — snapshot generation only happens via `stat report`.
 There is no `internal/worker` package; all scheduling is external.
@@ -51,6 +53,7 @@ There is no `internal/worker` package; all scheduling is external.
 
 ### Indicator System
 - **API reads from `fund_indicators` table, never recomputes.** `stat report` is the only writer (after `CalculateAll` succeeds). The serve path constructs no Horizon/price/fund services.
+- `fund_indicators` is heterogeneous: Layer0 dates come from `stat backfill-indicators` (JSONB-only), MONITORING-mapped IDs from `stat import-indicators-from-sheets`, daily multi-set from `stat report`. Different IDs land on different dates. `GetLatest`/`GetNearestBefore` therefore use `DISTINCT ON (indicator_id) ORDER BY snapshot_date DESC` — **do not "simplify" to `WHERE snapshot_date = MAX(...)`**, that drops every ID not present on the global max date.
 - `stat backfill-indicators` re-derives the strict deterministic subset (`indicator.DeterministicIDs` = I3, I4, I51–I53, I56–I61) for existing snapshots. Anything needing Horizon, LiveMetrics, or historical lookups (I24, I27, I33, I54, I55, dividend chain) cannot be honestly backfilled and is intentionally absent for pre-deploy dates.
 - Calculation is a layered DAG: `Layer0 → Layer1 → Layer2 → Dividend / Analytics / Tokenomics`.
 - Each `Calculator` declares `IDs()` and `Dependencies()`; `Registry.CalculateAll` resolves order via topological sort.
@@ -117,6 +120,7 @@ path = u.Path + "?" + u.RawQuery
 ## Local Development with Docker
 
 - `.env` contains multiline JSON (`GOOGLE_CREDENTIALS_JSON`) — cannot be `source`d in shell directly.
+- For local CLI runs against prod creds, `dotenv run -- ./stat <subcommand>` (from python-dotenv) parses multiline JSON correctly without Docker.
 - Use `docker compose` for local runs: `docker compose build app && docker compose run --rm --entrypoint "./stat" app report`
 - Dockerfile ENTRYPOINT is `./stat`, CMD is `serve` — to run subcommands use `--entrypoint "./stat" app <subcommand>`.
 - `docker compose up -d db` starts just PostgreSQL; `docker compose run --rm` for one-shot commands.
