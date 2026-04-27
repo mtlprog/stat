@@ -14,7 +14,7 @@
     "paths": {
         "/api/v1/charts/balance-by-subfund": {
             "get": {
-                "description": "Returns the EURMTL value of the 4 sub-fund accounts (MABIZ, MCITY, DEFI, BOSS) for a given date.",
+                "description": "Returns the EURMTL value of the 4 sub-fund accounts (MABIZ, MCITY, DEFI, BOSS) plus MAIN ISSUER and ADMIN for a given date.",
                 "produces": [
                     "application/json"
                 ],

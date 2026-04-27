@@ -65,7 +65,7 @@ func NewChartsHandler(snapshots *snapshot.Service, repo indicator.Repository) *C
 // GetBalanceBySubfund handles GET /api/v1/charts/balance-by-subfund.
 //
 // @Summary      Fund balance split by sub-fund
-// @Description  Returns the EURMTL value of the 4 sub-fund accounts (MABIZ, MCITY, DEFI, BOSS) for a given date.
+// @Description  Returns the EURMTL value of the 4 sub-fund accounts (MABIZ, MCITY, DEFI, BOSS) plus MAIN ISSUER and ADMIN for a given date.
 // @Tags         charts
 // @Produce      json
 // @Param        date  query  string  false  "Snapshot date (YYYY-MM-DD); defaults to latest"
@@ -105,8 +105,12 @@ func (h *ChartsHandler) GetBalanceBySubfund(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// TODO: temporarily includes issuer + operational alongside subfond so the pie matches
+	// AggregatedAccounts(); remove once the chart is finalized.
 	subfonds := lo.Filter(data.Accounts, func(a domain.FundAccountPortfolio, _ int) bool {
-		return a.Type == domain.AccountTypeSubfond
+		return a.Type == domain.AccountTypeSubfond ||
+			a.Type == domain.AccountTypeIssuer ||
+			a.Type == domain.AccountTypeOperational
 	})
 
 	addrByName := make(map[string]string, len(subfonds))
