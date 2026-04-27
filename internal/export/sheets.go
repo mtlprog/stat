@@ -42,6 +42,22 @@ type sheetMeta struct {
 	bandingIDs []int64
 }
 
+// ReadMonitoring fetches the full MONITORING sheet (`A1:AO`) as raw cell values.
+// Cells are returned as strings or numbers (per `valueRenderOption=UNFORMATTED_VALUE`).
+// Caller is responsible for skipping the two header rows.
+func (w *SheetsWriter) ReadMonitoring(ctx context.Context) ([][]any, error) {
+	resp, err := w.svc.Spreadsheets.Values.
+		Get(w.spreadsheetID, "MONITORING!A:AO").
+		ValueRenderOption("UNFORMATTED_VALUE").
+		DateTimeRenderOption("FORMATTED_STRING").
+		Context(ctx).
+		Do()
+	if err != nil {
+		return nil, fmt.Errorf("reading MONITORING sheet: %w", err)
+	}
+	return resp.Values, nil
+}
+
 // Write ensures required sheets exist, then clears, rewrites, and formats them.
 func (w *SheetsWriter) Write(ctx context.Context, rows []IndicatorRow) error {
 	meta, err := w.ensureSheets(ctx, "IND_ALL", "IND_MAIN")

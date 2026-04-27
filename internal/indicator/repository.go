@@ -105,20 +105,18 @@ func (r *PgRepository) GetByDate(ctx context.Context, slug string, date time.Tim
 	return indicators, nil
 }
 
-// GetLatest returns indicators for the most recent date in fund_indicators for the entity.
+// GetLatest returns the most recent value for each indicator ID. Different indicator
+// IDs may land on different dates (e.g. Layer0 from `stat report` vs Layer1+ from
+// `import-indicators-from-sheets`); each is returned at its latest observation.
+// The second return value is the most recent date across all indicators.
 func (r *PgRepository) GetLatest(ctx context.Context, slug string) ([]Indicator, time.Time, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT fi.snapshot_date, fi.indicator_id, fi.value
+		`SELECT DISTINCT ON (fi.indicator_id)
+		        fi.snapshot_date, fi.indicator_id, fi.value
 		 FROM fund_indicators fi
 		 JOIN fund_entities fe ON fe.id = fi.entity_id
 		 WHERE fe.slug = $1
-		   AND fi.snapshot_date = (
-		     SELECT MAX(fi2.snapshot_date)
-		     FROM fund_indicators fi2
-		     JOIN fund_entities fe2 ON fe2.id = fi2.entity_id
-		     WHERE fe2.slug = $1
-		   )
-		 ORDER BY fi.indicator_id`,
+		 ORDER BY fi.indicator_id, fi.snapshot_date DESC`,
 		slug)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("querying latest indicators: %w", err)
@@ -134,7 +132,9 @@ func (r *PgRepository) GetLatest(ctx context.Context, slug string) ([]Indicator,
 		if err := rows.Scan(&d, &id, &value); err != nil {
 			return nil, time.Time{}, fmt.Errorf("scanning indicator row: %w", err)
 		}
-		latest = d
+		if d.After(latest) {
+			latest = d
+		}
 		indicators = append(indicators, NewIndicator(id, value, "", ""))
 	}
 	if err := rows.Err(); err != nil {
@@ -181,20 +181,17 @@ func (r *PgRepository) GetHistory(ctx context.Context, slug string, ids []int, f
 	return points, nil
 }
 
-// GetNearestBefore returns indicators for the snapshot whose date is the latest one
-// at or before the given date. Returns nil (without error) if none exists.
+// GetNearestBefore returns the latest value PER indicator ID at or before the given date.
+// Different IDs may resolve to different dates — sparse indicators still get a comparison
+// from their own most recent observation in the window. Returns nil (without error) if none exists.
 func (r *PgRepository) GetNearestBefore(ctx context.Context, slug string, date time.Time) (map[int]Indicator, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT fi.indicator_id, fi.value
+		`SELECT DISTINCT ON (fi.indicator_id)
+		        fi.indicator_id, fi.value
 		 FROM fund_indicators fi
 		 JOIN fund_entities fe ON fe.id = fi.entity_id
-		 WHERE fe.slug = $1
-		   AND fi.snapshot_date = (
-		     SELECT MAX(fi2.snapshot_date)
-		     FROM fund_indicators fi2
-		     JOIN fund_entities fe2 ON fe2.id = fi2.entity_id
-		     WHERE fe2.slug = $1 AND fi2.snapshot_date <= $2
-		   )`,
+		 WHERE fe.slug = $1 AND fi.snapshot_date <= $2
+		 ORDER BY fi.indicator_id, fi.snapshot_date DESC`,
 		slug, date)
 	if err != nil {
 		return nil, fmt.Errorf("querying nearest-before indicators: %w", err)
