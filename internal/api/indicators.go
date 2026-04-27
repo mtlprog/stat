@@ -80,8 +80,9 @@ func (h *IndicatorHandler) GetIndicators(w http.ResponseWriter, r *http.Request)
 	for _, days := range periods {
 		hist, err := h.repo.GetNearestBefore(r.Context(), fundSlug, latestDate.AddDate(0, 0, -days))
 		if err != nil {
-			slog.Warn("failed to fetch historical indicators", "days", days, "error", err)
-			continue
+			slog.Error("failed to fetch historical indicators", "days", days, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		if hist != nil {
 			historical[days] = hist

@@ -210,7 +210,7 @@ func runReport(c *cli.Context) error {
 			return fmt.Errorf("initializing Google Sheets writer: %w", err)
 		}
 		exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
-		rows, err := exportSvc.Export(ctx, data)
+		rows, err := exportSvc.ExportPrecomputed(ctx, indicators)
 		if err != nil {
 			return fmt.Errorf("exporting to Google Sheets: %w", err)
 		}
