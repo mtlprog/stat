@@ -1,3 +1,11 @@
+// Command stat is the Montelibero Fund statistics CLI.
+//
+// @title           MTL Fund Statistics API
+// @version         1.0
+// @description     Read-only API exposing fund snapshots, computed indicators, and chart data.
+// @description     All numeric fields encoded as JSON strings to preserve full Stellar-stroop precision.
+// @BasePath        /
+// @schemes         http https
 package main
 
 import (
@@ -84,6 +92,11 @@ func main() {
 					},
 				},
 				Action: runImportExcel,
+			},
+			{
+				Name:   "backfill-indicators",
+				Usage:  "Recompute and persist deterministic indicators for all stored snapshots",
+				Action: runBackfillIndicators,
 			},
 		},
 	}
@@ -173,10 +186,25 @@ func runReport(c *cli.Context) error {
 	}
 	slog.Info("snapshot generated successfully", "date", date.Format("2006-01-02"))
 
-	if cfg.GoogleSheetsSpreadsheetID != "" && cfg.GoogleCredentialsJSON != "" {
-		hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
-		indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
 
+	indicators, err := indicatorSvc.CalculateAll(ctx, data)
+	if err != nil {
+		return fmt.Errorf("calculating indicators: %w", err)
+	}
+
+	entityID, err := snapshotRepo.GetEntityID(ctx, "mtlf")
+	if err != nil {
+		return fmt.Errorf("getting entity id for indicator persistence: %w", err)
+	}
+	indicatorRepo := indicator.NewPgRepository(pool)
+	if err := indicatorRepo.Save(ctx, entityID, date, indicators); err != nil {
+		return fmt.Errorf("persisting indicators: %w", err)
+	}
+	slog.Info("indicators persisted", "count", len(indicators), "date", date.Format("2006-01-02"))
+
+	if cfg.GoogleSheetsSpreadsheetID != "" && cfg.GoogleCredentialsJSON != "" {
 		sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
 		if err != nil {
 			return fmt.Errorf("initializing Google Sheets writer: %w", err)
@@ -823,6 +851,116 @@ func buildMonitoringHistory(excelRows [][]any) export.MonitoringHistory {
 	return hist
 }
 
+// runBackfillIndicators recomputes deterministic indicators for every existing snapshot
+// and writes them to fund_indicators. Indicators excluded from indicator.DeterministicIDs
+// (live tokenomics, dividend chain, MTLRECT live price) are skipped — past values for
+// those are unrecoverable and remain absent until the next daily `stat report` run.
+func runBackfillIndicators(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	snapshotRepo := snapshot.NewPgRepository(pool)
+	indicatorRepo := indicator.NewPgRepository(pool)
+
+	entityID, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics")
+	if err != nil {
+		return fmt.Errorf("ensuring entity: %w", err)
+	}
+
+	metas, err := snapshotRepo.ListMeta(ctx, "mtlf")
+	if err != nil {
+		return fmt.Errorf("listing snapshot metadata: %w", err)
+	}
+
+	// Iterate oldest-first so partial progress is sequential.
+	sort.Slice(metas, func(i, j int) bool { return metas[i].SnapshotDate.Before(metas[j].SnapshotDate) })
+
+	// nil Horizon and price source: non-deterministic indicators will produce zero,
+	// which we then drop via DeterministicIDs.
+	indicatorSvc := indicator.NewService(nil, nil, nil)
+
+	const maxConsecutiveErrors = 5
+	var processed, failed, consecutive int
+
+	for i, m := range metas {
+		date := time.Date(m.SnapshotDate.Year(), m.SnapshotDate.Month(), m.SnapshotDate.Day(), 0, 0, 0, 0, time.UTC)
+
+		snap, err := snapshotRepo.GetByDate(ctx, "mtlf", date)
+		if err != nil {
+			if errors.Is(err, snapshot.ErrNotFound) {
+				// Snapshot vanished between ListMeta and now — skip without counting.
+				continue
+			}
+			failed++
+			consecutive++
+			slog.Error("backfill: load snapshot", "date", date.Format("2006-01-02"), "error", err)
+			if consecutive >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive errors, last: %w", consecutive, err)
+			}
+			continue
+		}
+
+		var fundData domain.FundStructureData
+		if err := json.Unmarshal(snap.Data, &fundData); err != nil {
+			failed++
+			consecutive++
+			slog.Error("backfill: parse snapshot", "date", date.Format("2006-01-02"), "error", err)
+			if consecutive >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive parse errors, last: %w", consecutive, err)
+			}
+			continue
+		}
+
+		all, err := indicatorSvc.CalculateAll(ctx, fundData)
+		if err != nil {
+			failed++
+			consecutive++
+			slog.Error("backfill: calculate indicators", "date", date.Format("2006-01-02"), "error", err)
+			if consecutive >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive calc errors, last: %w", consecutive, err)
+			}
+			continue
+		}
+
+		deterministic := lo.Filter(all, func(ind indicator.Indicator, _ int) bool {
+			return indicator.DeterministicIDs[ind.ID]
+		})
+
+		if err := indicatorRepo.Save(ctx, entityID, date, deterministic); err != nil {
+			failed++
+			consecutive++
+			slog.Error("backfill: persist indicators", "date", date.Format("2006-01-02"), "error", err)
+			if consecutive >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive save errors, last: %w", consecutive, err)
+			}
+			continue
+		}
+
+		consecutive = 0
+		processed++
+		if (i+1)%50 == 0 {
+			slog.Info("backfill progress", "processed", processed, "failed", failed, "total", len(metas))
+		}
+	}
+
+	slog.Info("backfill complete", "processed", processed, "failed", failed, "total", len(metas))
+	return nil
+}
+
 func runServe(c *cli.Context) error {
 	ctx := c.Context
 	cfg := config.Load()
@@ -841,33 +979,18 @@ func runServe(c *cli.Context) error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
-	portfolioSvc := portfolio.NewService(horizonClient)
-	priceSvc := price.NewService(horizonClient)
-	valuationSvc := valuation.NewService(horizonClient)
-
-	coingecko := external.NewCoinGeckoClient(cfg.CoinGeckoURL, cfg.CoinGeckoDelay, cfg.CoinGeckoRetryMax)
-	quoteRepo := external.NewPgQuoteRepository(pool)
-	externalSvc := external.NewService(coingecko, quoteRepo)
-
-	fundSvc := fund.NewService(portfolioSvc, priceSvc, valuationSvc, externalSvc)
-
 	snapshotRepo := snapshot.NewPgRepository(pool)
-	var fundAddrs []string
-	for _, a := range domain.AccountRegistry() {
-		fundAddrs = append(fundAddrs, a.Address)
-	}
-	metricsSvc := metrics.NewService(horizonClient, priceSvc, fundAddrs)
-	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo, metricsSvc)
+	indicatorRepo := indicator.NewPgRepository(pool)
+
+	// The serve path is read-only: no fund generation, no Horizon. Pass nil for the
+	// FundStructureService — Service.Generate is never invoked here.
+	snapshotSvc := snapshot.NewService(nil, snapshotRepo)
 
 	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {
 		return fmt.Errorf("ensuring entity: %w", err)
 	}
 
-	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
-	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
-
-	srv := api.NewServer(cfg.HTTPPort, snapshotSvc, indicatorSvc)
+	srv := api.NewServer(cfg.HTTPPort, snapshotSvc, indicatorRepo)
 
 	serverErr := make(chan error, 1)
 	go func() {

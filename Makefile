@@ -1,8 +1,16 @@
-.PHONY: build test fmt vet lint clean up down logs
+.PHONY: build test fmt vet lint clean up down logs docs
 
 # Build
 build:
 	go build -o stat ./cmd/stat
+
+# Regenerate Swagger/OpenAPI spec from handler annotations.
+docs:
+	go run github.com/swaggo/swag/cmd/swag@latest init \
+		-g cmd/stat/main.go \
+		-o docs \
+		--parseDependency \
+		--parseInternal
 
 # Run tests
 test:
