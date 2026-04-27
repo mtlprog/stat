@@ -22,6 +22,14 @@ func NewHandler(snapshots *snapshot.Service) *Handler {
 }
 
 // GetLatestSnapshot handles GET /api/v1/snapshots/latest.
+//
+// @Summary      Latest snapshot
+// @Description  Returns the most recent fund snapshot.
+// @Tags         snapshots
+// @Produce      json
+// @Success      200  {object}  snapshot.Snapshot
+// @Failure      404  {object}  map[string]string
+// @Router       /api/v1/snapshots/latest [get]
 func (h *Handler) GetLatestSnapshot(w http.ResponseWriter, r *http.Request) {
 	s, err := h.snapshots.GetLatest(r.Context(), "mtlf")
 	if err != nil {
@@ -37,6 +45,16 @@ func (h *Handler) GetLatestSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetSnapshotByDate handles GET /api/v1/snapshots/{date}.
+//
+// @Summary      Snapshot by date
+// @Description  Returns the fund snapshot for an exact date.
+// @Tags         snapshots
+// @Produce      json
+// @Param        date  path  string  true  "Snapshot date (YYYY-MM-DD)"
+// @Success      200  {object}  snapshot.Snapshot
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Router       /api/v1/snapshots/{date} [get]
 func (h *Handler) GetSnapshotByDate(w http.ResponseWriter, r *http.Request) {
 	dateStr := r.PathValue("date")
 	date, err := time.Parse("2006-01-02", dateStr)
@@ -59,6 +77,14 @@ func (h *Handler) GetSnapshotByDate(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListSnapshots handles GET /api/v1/snapshots.
+//
+// @Summary      List snapshots
+// @Description  Returns recent fund snapshots, newest first.
+// @Tags         snapshots
+// @Produce      json
+// @Param        limit  query  int  false  "Maximum number of snapshots (default 30, max 365)"
+// @Success      200  {array}  snapshot.Snapshot
+// @Router       /api/v1/snapshots [get]
 func (h *Handler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 	const maxLimit = 365
 	limit := 30

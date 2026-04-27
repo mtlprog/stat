@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"time"
 
+	httpswagger "github.com/swaggo/http-swagger"
+
+	_ "github.com/mtlprog/stat/docs"
 	"github.com/mtlprog/stat/internal/indicator"
 	"github.com/mtlprog/stat/internal/snapshot"
 	"github.com/mtlprog/stat/internal/static"
@@ -25,7 +28,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 // NewServer creates an HTTP server with all routes configured.
-func NewServer(port string, snapshots *snapshot.Service, indicators *indicator.Service) *http.Server {
+//
+// @title           MTL Fund Statistics API
+// @version         1.0
+// @description     Read-only API exposing fund snapshots, computed indicators, and chart data.
+// @BasePath        /
+func NewServer(port string, snapshots *snapshot.Service, indicators indicator.Repository) *http.Server {
 	handler := NewHandler(snapshots)
 
 	mux := http.NewServeMux()
@@ -42,10 +50,15 @@ func NewServer(port string, snapshots *snapshot.Service, indicators *indicator.S
 	mux.HandleFunc("GET /api/fund-structure", handler.GetFundStructureCompat)
 
 	if indicators != nil {
-		indHandler := NewIndicatorHandler(snapshots, indicators)
+		indHandler := NewIndicatorHandler(indicators)
+		chartsHandler := NewChartsHandler(snapshots, indicators)
 		mux.HandleFunc("GET /api/v1/indicators", indHandler.GetIndicators)
 		mux.HandleFunc("GET /api/v1/indicators/{date}", indHandler.GetIndicatorsByDate)
+		mux.HandleFunc("GET /api/v1/charts/balance-by-subfund", chartsHandler.GetBalanceBySubfund)
+		mux.HandleFunc("GET /api/v1/charts/indicator-history", chartsHandler.GetIndicatorHistory)
 	}
+
+	mux.Handle("GET /swagger/", httpswagger.Handler(httpswagger.URL("/swagger/doc.json")))
 
 	return &http.Server{
 		Addr:         ":" + port,
