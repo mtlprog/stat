@@ -125,7 +125,16 @@ func (s *Service) ExportWithHistory(ctx context.Context, data domain.FundStructu
 	if err != nil {
 		return nil, fmt.Errorf("calculating current indicators: %w", err)
 	}
+	return s.exportRows(ctx, current, monHist)
+}
 
+// ExportPrecomputed writes IND_ALL/IND_MAIN using indicators already computed by the caller.
+// Used by `stat report` to avoid running CalculateAll twice (once for DB persistence, once here).
+func (s *Service) ExportPrecomputed(ctx context.Context, current []indicator.Indicator) ([]IndicatorRow, error) {
+	return s.exportRows(ctx, current, nil)
+}
+
+func (s *Service) exportRows(ctx context.Context, current []indicator.Indicator, monHist MonitoringHistory) ([]IndicatorRow, error) {
 	historicalByPeriod := s.fetchHistorical(ctx, []int{7, 30, 90, 365})
 
 	// Fill gaps from monitoring history.

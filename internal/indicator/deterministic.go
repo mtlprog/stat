@@ -11,8 +11,8 @@ package indicator
 // Excluded — even though the calculator runs, the result is meaningless without
 // LiveMetrics, Horizon, or historical snapshots:
 //   I1, I2, I5, I6, I7, I8, I10            — need MTLCirculation / market price (LiveMetrics or Horizon)
-//   I11, I15, I16, I17, I18, I33, I34, I54 — dividend chain (LiveMetrics + 12 months of history)
-//   I21, I22, I23, I27, I40                — shareholder counts (Horizon)
+//   I11, I15, I16, I17, I33, I34, I54      — dividend chain (LiveMetrics + 12 months of history)
+//   I18, I21, I22, I23, I27, I40           — Horizon-derived holder/shareholder metrics
 //   I24, I25, I26                          — EURMTL participants & DEX volumes (Horizon)
 //   I30                                    — Price/Book (depends on I8, I10)
 //   I43–I48                                — analytics (need price history)
