@@ -51,9 +51,11 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 	// I27 prefers stored LiveMetrics value; I23 still requires live data (no median in snapshot).
 	var mergedHolders map[string]decimal.Decimal
 	i27 := decimal.Zero
+	i27FromLiveMetrics := false
 	i23 := decimal.Zero
 	if data.LiveMetrics != nil && data.LiveMetrics.MTLShareholders != nil {
 		i27 = domain.SafeParse(*data.LiveMetrics.MTLShareholders)
+		i27FromLiveMetrics = true
 	}
 	if c.Horizon != nil {
 		mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
@@ -83,8 +85,8 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 			}
 
 			// I27: count of unique holders — only set from live data when LiveMetrics
-			// did not already provide the value above.
-			if i27.IsZero() {
+			// did not provide the value (a legit stored 0 must not be overwritten).
+			if !i27FromLiveMetrics {
 				i27 = decimal.NewFromInt(int64(len(mergedHolders)))
 			}
 

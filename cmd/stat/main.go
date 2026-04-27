@@ -905,26 +905,27 @@ func runImportIndicatorsFromSheets(c *cli.Context) error {
 	colIDs := export.MonitoringColumnIndicatorIDs()
 
 	const maxConsecutiveErrors = 5
-	var processed, skipped, consecutive int
+	var processed, consecutive int
+	var skippedEmpty, skippedBadDate, skippedNoIndicators, suppressedCells int
 
 	for i, row := range rows {
 		if i < 2 {
 			continue // header rows
 		}
 		if len(row) == 0 {
-			skipped++
+			skippedEmpty++
 			continue
 		}
 
 		dateStr, ok := row[0].(string)
 		if !ok || dateStr == "" {
-			skipped++
+			skippedEmpty++
 			continue
 		}
 		date, err := parseSheetDate(dateStr)
 		if err != nil {
 			slog.Warn("skipping row with unparseable date", "rowIndex", i+1, "value", dateStr, "error", err)
-			skipped++
+			skippedBadDate++
 			continue
 		}
 
@@ -934,15 +935,19 @@ func runImportIndicatorsFromSheets(c *cli.Context) error {
 			if id == 0 {
 				continue
 			}
-			val, ok := parseSheetNumber(row[j+1])
-			if !ok {
+			val, outcome := parseSheetNumber(row[j+1])
+			if outcome == sheetCellParseFailed {
+				suppressedCells++
+				continue
+			}
+			if outcome != sheetCellOK {
 				continue
 			}
 			inds = append(inds, indicator.Indicator{ID: id, Value: val})
 		}
 
 		if len(inds) == 0 {
-			skipped++
+			skippedNoIndicators++
 			continue
 		}
 
@@ -958,11 +963,25 @@ func runImportIndicatorsFromSheets(c *cli.Context) error {
 		consecutive = 0
 		processed++
 		if processed%50 == 0 {
-			slog.Info("import progress", "processed", processed, "skipped", skipped)
+			slog.Info("import progress", "processed", processed)
 		}
 	}
 
-	slog.Info("MONITORING indicator import complete", "processed", processed, "skipped", skipped, "total_rows", len(rows)-2)
+	if suppressedCells > 0 {
+		slog.Warn("suppressed cells with unparseable values during import",
+			"count", suppressedCells,
+			"explanation", "non-numeric, non-error strings or unhandled types — values dropped, not zero-filled",
+		)
+	}
+
+	slog.Info("MONITORING indicator import complete",
+		"processed", processed,
+		"skippedEmpty", skippedEmpty,
+		"skippedBadDate", skippedBadDate,
+		"skippedNoIndicators", skippedNoIndicators,
+		"suppressedCells", suppressedCells,
+		"total_rows", len(rows)-2,
+	)
 	return nil
 }
 
@@ -977,26 +996,41 @@ func parseSheetDate(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("cannot parse date %q", s)
 }
 
-// parseSheetNumber accepts float64 (UNFORMATTED_VALUE) or numeric strings; rejects
-// Excel error strings (e.g. #REF!) and empty cells.
-func parseSheetNumber(v any) (decimal.Decimal, bool) {
+// sheetCellOutcome distinguishes the three possible results of parsing a MONITORING cell.
+type sheetCellOutcome int
+
+const (
+	// sheetCellOK: parsed to a valid decimal value.
+	sheetCellOK sheetCellOutcome = iota
+	// sheetCellEmpty: cell empty or Excel error string (#REF!, #DIV/0!, …) — silently skipped.
+	sheetCellEmpty
+	// sheetCellParseFailed: cell had non-empty content that didn't parse as a number — surfaced as suppressedCells.
+	sheetCellParseFailed
+)
+
+// parseSheetNumber accepts float64 (UNFORMATTED_VALUE) or numeric strings.
+// Excel error strings and empty cells return sheetCellEmpty.
+// Non-empty unparseable content returns sheetCellParseFailed so the caller can count it.
+func parseSheetNumber(v any) (decimal.Decimal, sheetCellOutcome) {
 	switch x := v.(type) {
 	case float64:
-		return decimal.NewFromFloat(x), true
+		return decimal.NewFromFloat(x), sheetCellOK
 	case int64:
-		return decimal.NewFromInt(x), true
+		return decimal.NewFromInt(x), sheetCellOK
 	case string:
 		if x == "" || strings.HasPrefix(x, "#") {
-			return decimal.Zero, false
+			return decimal.Zero, sheetCellEmpty
 		}
 		cleaned := strings.ReplaceAll(x, ",", "")
 		d, err := decimal.NewFromString(cleaned)
 		if err != nil {
-			return decimal.Zero, false
+			return decimal.Zero, sheetCellParseFailed
 		}
-		return d, true
+		return d, sheetCellOK
+	case nil:
+		return decimal.Zero, sheetCellEmpty
 	}
-	return decimal.Zero, false
+	return decimal.Zero, sheetCellParseFailed
 }
 
 // runBackfillIndicators recomputes deterministic indicators for every existing snapshot
