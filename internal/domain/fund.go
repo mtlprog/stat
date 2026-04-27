@@ -33,6 +33,9 @@ type FundLiveMetrics struct {
 	MonthlyDividends   *string `json:"monthly_dividends,omitempty"`
 	EURMTLDailyVolume  *string `json:"eurmtl_daily_volume,omitempty"`
 	EURMTL30dVolume    *string `json:"eurmtl_30d_volume,omitempty"`
+	// Holder counts captured at snapshot time so I24/I27 history is reproducible.
+	EURMTLParticipants *string `json:"eurmtl_participants,omitempty"`
+	MTLShareholders    *string `json:"mtl_shareholders,omitempty"`
 }
 
 // FundStructureData is the top-level output of the fund aggregation pipeline.

@@ -16,6 +16,8 @@ type Horizon interface {
 	FetchAllPoolReservesForAsset(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
 	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
 	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
+	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
+	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
 }
 
 // PriceSource provides market price lookups.
@@ -97,8 +99,51 @@ func (s *Service) EnrichMetrics(ctx context.Context, data *domain.FundStructureD
 		m.EURMTL30dVolume = &mv
 	}
 
+	// I24: EURMTL participants — accounts with non-zero EURMTL balance.
+	minNonZero := decimal.New(1, -7)
+	if count, err := s.horizon.FetchAssetHolderCountByBalance(ctx, domain.EURMTLAsset(), minNonZero); err != nil {
+		slog.Warn("metrics: failed to fetch EURMTL participants", "error", err)
+	} else {
+		v := decimal.NewFromInt(int64(count)).String()
+		m.EURMTLParticipants = &v
+	}
+
+	// I27: MTL shareholders — unique accounts holding >=1 MTL or MTLRECT.
+	if count, err := s.fetchMTLShareholders(ctx); err != nil {
+		slog.Warn("metrics: failed to fetch MTL shareholders", "error", err)
+	} else {
+		v := decimal.NewFromInt(int64(count)).String()
+		m.MTLShareholders = &v
+	}
+
 	data.LiveMetrics = m
 	return nil
+}
+
+// fetchMTLShareholders returns the number of unique accounts holding >=1 MTL or MTLRECT.
+// Mirrors the I27 logic in TokenomicsCalculator: union by account ID across both assets.
+func (s *Service) fetchMTLShareholders(ctx context.Context) (int, error) {
+	minOne := decimal.NewFromInt(1)
+	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
+	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
+
+	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(ctx, mtlAsset, minOne)
+	if err != nil {
+		return 0, err
+	}
+	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(ctx, mtlrectAsset, minOne)
+	if err != nil {
+		return 0, err
+	}
+
+	holders := make(map[string]struct{}, len(mtl)+len(mtlrect))
+	for id := range mtl {
+		holders[id] = struct{}{}
+	}
+	for id := range mtlrect {
+		holders[id] = struct{}{}
+	}
+	return len(holders), nil
 }
 
 func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error) {

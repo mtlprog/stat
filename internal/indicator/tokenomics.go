@@ -32,9 +32,11 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 	minNonZero := decimal.New(1, -7) // 0.0000001 = 1 stroop, smallest non-zero Stellar balance
 	minOne := decimal.NewFromInt(1)  // balance >= 1
 
-	// I24: EURMTL holder count (accounts with balance >= 1 stroop)
+	// I24: EURMTL holder count — prefer stored value from snapshot, fall back to live Horizon.
 	i24 := decimal.Zero
-	if c.Horizon != nil {
+	if data.LiveMetrics != nil && data.LiveMetrics.EURMTLParticipants != nil {
+		i24 = domain.SafeParse(*data.LiveMetrics.EURMTLParticipants)
+	} else if c.Horizon != nil {
 		count, err := c.Horizon.FetchAssetHolderCountByBalance(ctx, domain.EURMTLAsset(), minNonZero)
 		if err != nil {
 			slog.Warn("failed to fetch asset holders", "asset", "EURMTL", "error", err)
@@ -46,9 +48,13 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 	// Fetch holder balances once for both I27 (count) and I23 (median).
 	// FetchAssetHolderBalancesByBalance returns map[account_id]balance, so we get
 	// both IDs and balances in a single pair of Horizon pagination sweeps.
+	// I27 prefers stored LiveMetrics value; I23 still requires live data (no median in snapshot).
 	var mergedHolders map[string]decimal.Decimal
 	i27 := decimal.Zero
 	i23 := decimal.Zero
+	if data.LiveMetrics != nil && data.LiveMetrics.MTLShareholders != nil {
+		i27 = domain.SafeParse(*data.LiveMetrics.MTLShareholders)
+	}
 	if c.Horizon != nil {
 		mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
 		mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
@@ -76,8 +82,11 @@ func (c *TokenomicsCalculator) Calculate(ctx context.Context, data domain.FundSt
 				mergedHolders[id] = mergedHolders[id].Add(bal)
 			}
 
-			// I27: count of unique holders
-			i27 = decimal.NewFromInt(int64(len(mergedHolders)))
+			// I27: count of unique holders — only set from live data when LiveMetrics
+			// did not already provide the value above.
+			if i27.IsZero() {
+				i27 = decimal.NewFromInt(int64(len(mergedHolders)))
+			}
 
 			// I23: median of merged shareholdings
 			// Note: minBalance is applied per-asset, not on the merged total.

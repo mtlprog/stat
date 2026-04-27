@@ -98,6 +98,11 @@ func main() {
 				Usage:  "Recompute and persist deterministic indicators for all stored snapshots",
 				Action: runBackfillIndicators,
 			},
+			{
+				Name:   "import-indicators-from-sheets",
+				Usage:  "Import historical indicator values from the MONITORING Google Sheets tab into fund_indicators",
+				Action: runImportIndicatorsFromSheets,
+			},
 		},
 	}
 
@@ -849,6 +854,149 @@ func buildMonitoringHistory(excelRows [][]any) export.MonitoringHistory {
 	}
 
 	return hist
+}
+
+// runImportIndicatorsFromSheets reads the MONITORING tab from the configured Google Sheet
+// and upserts each (date, indicator_id, value) row into fund_indicators. Used to seed
+// historical indicator values that pre-date snapshot persistence — values for indicator
+// IDs that aren't in the MONITORING column mapping (e.g. I49) are silently absent.
+func runImportIndicatorsFromSheets(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.GoogleSheetsSpreadsheetID == "" || cfg.GoogleCredentialsJSON == "" {
+		return fmt.Errorf("GOOGLE_SHEETS_SPREADSHEET_ID and GOOGLE_CREDENTIALS_JSON are required")
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	snapshotRepo := snapshot.NewPgRepository(pool)
+	indicatorRepo := indicator.NewPgRepository(pool)
+
+	entityID, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics")
+	if err != nil {
+		return fmt.Errorf("ensuring entity: %w", err)
+	}
+
+	sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
+	if err != nil {
+		return fmt.Errorf("initializing Google Sheets client: %w", err)
+	}
+
+	rows, err := sheetsWriter.ReadMonitoring(ctx)
+	if err != nil {
+		return fmt.Errorf("reading MONITORING sheet: %w", err)
+	}
+	if len(rows) < 3 {
+		return fmt.Errorf("MONITORING sheet has fewer than 3 rows (got %d)", len(rows))
+	}
+
+	colIDs := export.MonitoringColumnIndicatorIDs()
+
+	const maxConsecutiveErrors = 5
+	var processed, skipped, consecutive int
+
+	for i, row := range rows {
+		if i < 2 {
+			continue // header rows
+		}
+		if len(row) == 0 {
+			skipped++
+			continue
+		}
+
+		dateStr, ok := row[0].(string)
+		if !ok || dateStr == "" {
+			skipped++
+			continue
+		}
+		date, err := parseSheetDate(dateStr)
+		if err != nil {
+			slog.Warn("skipping row with unparseable date", "rowIndex", i+1, "value", dateStr, "error", err)
+			skipped++
+			continue
+		}
+
+		var inds []indicator.Indicator
+		for j := 0; j < len(colIDs) && j+1 < len(row); j++ {
+			id := colIDs[j]
+			if id == 0 {
+				continue
+			}
+			val, ok := parseSheetNumber(row[j+1])
+			if !ok {
+				continue
+			}
+			inds = append(inds, indicator.Indicator{ID: id, Value: val})
+		}
+
+		if len(inds) == 0 {
+			skipped++
+			continue
+		}
+
+		if err := indicatorRepo.Save(ctx, entityID, date, inds); err != nil {
+			consecutive++
+			slog.Error("failed to save indicators", "date", date.Format("2006-01-02"), "error", err)
+			if consecutive >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive save errors, last: %w", consecutive, err)
+			}
+			continue
+		}
+
+		consecutive = 0
+		processed++
+		if processed%50 == 0 {
+			slog.Info("import progress", "processed", processed, "skipped", skipped)
+		}
+	}
+
+	slog.Info("MONITORING indicator import complete", "processed", processed, "skipped", skipped, "total_rows", len(rows)-2)
+	return nil
+}
+
+// parseSheetDate parses dd.mm.yyyy and d.m.yyyy (both seen in MONITORING column A),
+// plus ISO and US fallbacks. Returns midnight UTC.
+func parseSheetDate(s string) (time.Time, error) {
+	for _, layout := range []string{"02.01.2006", "2.1.2006", "2006-01-02", "1/2/2006", "01-02-2006"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse date %q", s)
+}
+
+// parseSheetNumber accepts float64 (UNFORMATTED_VALUE) or numeric strings; rejects
+// Excel error strings (e.g. #REF!) and empty cells.
+func parseSheetNumber(v any) (decimal.Decimal, bool) {
+	switch x := v.(type) {
+	case float64:
+		return decimal.NewFromFloat(x), true
+	case int64:
+		return decimal.NewFromInt(x), true
+	case string:
+		if x == "" || strings.HasPrefix(x, "#") {
+			return decimal.Zero, false
+		}
+		cleaned := strings.ReplaceAll(x, ",", "")
+		d, err := decimal.NewFromString(cleaned)
+		if err != nil {
+			return decimal.Zero, false
+		}
+		return d, true
+	}
+	return decimal.Zero, false
 }
 
 // runBackfillIndicators recomputes deterministic indicators for every existing snapshot
