@@ -14,7 +14,26 @@ go test ./...
 # Format and lint
 go fmt ./...
 go vet ./...
+
+# Regenerate Swagger spec from handler annotations
+make docs
 ```
+
+The generated `docs/{docs.go,swagger.json,swagger.yaml}` are committed — `internal/api/server.go` blank-imports `github.com/mtlprog/stat/docs` for spec registration, so they must be present at compile time. Re-run `make docs` after adding/changing any `// @…` annotations on handlers.
+
+## Smoke testing SQL / API changes
+
+Unit tests with mocks don't catch SQL typos or alias bugs. For PRs that touch repository SQL or API handlers, smoke-test against a real Postgres before merge:
+
+```bash
+# Local brew Postgres works when Docker isn't running.
+psql -d postgres -c "CREATE DATABASE stat_smoke"
+DATABASE_URL="postgres://$USER@localhost:5432/stat_smoke?sslmode=disable" HTTP_PORT=18080 ./stat serve &
+# Seed via psql HEREDOC, curl endpoints, then:
+psql -d postgres -c "DROP DATABASE stat_smoke"
+```
+
+Migrations auto-run on every subcommand startup (`database.RunMigrations` in each `runX`), so the DB is ready as soon as `serve` (or any other subcommand) connects.
 
 ## Deployment Model (Railway)
 
@@ -31,7 +50,8 @@ There is no `internal/worker` package; all scheduling is external.
 ## Architecture
 
 ### Indicator System
-- Indicators are computed **on-the-fly** from snapshots — never stored in the DB.
+- **API reads from `fund_indicators` table, never recomputes.** `stat report` is the only writer (after `CalculateAll` succeeds). The serve path constructs no Horizon/price/fund services.
+- `stat backfill-indicators` re-derives the strict deterministic subset (`indicator.DeterministicIDs` = I3, I4, I51–I53, I56–I61) for existing snapshots. Anything needing Horizon, LiveMetrics, or historical lookups (I24, I27, I33, I54, I55, dividend chain) cannot be honestly backfilled and is intentionally absent for pre-deploy dates.
 - Calculation is a layered DAG: `Layer0 → Layer1 → Layer2 → Dividend / Analytics / Tokenomics`.
 - Each `Calculator` declares `IDs()` and `Dependencies()`; `Registry.CalculateAll` resolves order via topological sort.
 - To add a new calculator: implement `Calculator` interface, define its Horizon interface in the same file, register in `service.go`, extend `IndicatorHorizon` if it needs `horizon.Client`.
