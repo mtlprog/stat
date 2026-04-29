@@ -14,15 +14,11 @@ import (
 	"github.com/mtlprog/stat/internal/snapshot"
 )
 
-// DividendHorizon provides access to Horizon for dividend calculations.
-type DividendHorizon interface {
-	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
-}
-
-// DividendCalculator computes dividend-related indicators (I11, I15, I16, I17, I33, I34, I54, I55).
-type DividendCalculator struct {
-	Horizon DividendHorizon
-}
+// DividendCalculator computes dividend-related indicators (I11, I15, I16, I17, I33, I34, I54, I55)
+// purely from snapshot data. I11 (Monthly Dividends) lives in data.LiveMetrics — populated
+// upstream by metrics.EnrichMetrics, including a sticky-fallback that keeps the prior day's
+// value when the live fetch fails.
+type DividendCalculator struct{}
 
 func (c *DividendCalculator) IDs() []int          { return []int{11, 15, 16, 17, 33, 34, 54, 55} }
 func (c *DividendCalculator) Dependencies() []int { return []int{5, 10} }
@@ -31,19 +27,8 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 	i5 := deps[5].Value   // Total Shares
 	i10 := deps[10].Value // Share Market Price
 
-	// I11: Monthly Dividends — prefer stored value from snapshot, fall back to live Horizon
-	i11 := decimal.Zero
-	if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {
-		i11 = domain.SafeParse(*data.LiveMetrics.MonthlyDividends)
-	} else if c.Horizon != nil {
-		fundAddresses := lo.Map(domain.AccountRegistry(), func(a domain.FundAccount, _ int) string { return a.Address })
-		amt, err := c.Horizon.FetchMonthlyEURMTLOutflow(ctx, domain.IssuerAddress, fundAddresses)
-		if err != nil {
-			slog.Warn("failed to fetch monthly EURMTL outflow", "error", err)
-		} else {
-			i11 = amt
-		}
-	}
+	// I11: Monthly Dividends — read from snapshot. Absent ⇒ zero (legacy snapshots).
+	i11 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MonthlyDividends })
 
 	// I15: DPS = I11 / I5
 	i15 := decimal.Zero
@@ -117,14 +102,14 @@ func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) decimal.Decima
 	snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, yearAgo)
 	if err != nil {
 		if !errors.Is(err, snapshot.ErrNotFound) {
-			slog.Warn("failed to fetch historical snapshot for price year ago", "date", yearAgo.Format("2006-01-02"), "error", err)
+			slog.Error("failed to fetch historical snapshot for price year ago", "date", yearAgo.Format("2006-01-02"), "error", err)
 		}
 		return decimal.Zero
 	}
 
 	var historicalData domain.FundStructureData
 	if err := json.Unmarshal(snap.Data, &historicalData); err != nil {
-		slog.Warn("failed to parse historical snapshot data", "error", err)
+		slog.Error("failed to parse historical snapshot data", "error", err)
 		return decimal.Zero
 	}
 
@@ -147,14 +132,14 @@ func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decim
 		snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, target)
 		if err != nil {
 			if !errors.Is(err, snapshot.ErrNotFound) {
-				slog.Warn("failed to fetch snapshot for monthly dividends",
+				slog.Error("failed to fetch snapshot for monthly dividends",
 					"month", i, "target", target.Format("2006-01"), "error", err)
 			}
 			continue
 		}
 		var data domain.FundStructureData
 		if err := json.Unmarshal(snap.Data, &data); err != nil {
-			slog.Warn("failed to parse snapshot for monthly dividends", "month", i, "error", err)
+			slog.Error("failed to parse snapshot for monthly dividends", "month", i, "error", err)
 			continue
 		}
 		if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {

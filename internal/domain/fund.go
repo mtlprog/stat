@@ -24,18 +24,20 @@ type AggregatedTotals struct {
 }
 
 // FundLiveMetrics stores live-computed metrics captured at snapshot generation time.
-// Indicator calculators prefer these values over live Horizon calls, enabling accurate
-// period-over-period comparison from stored snapshots.
+// Indicator calculators read these values exclusively — they do not call Horizon.
+// This makes snapshots fully reproducible and keeps the report runtime bounded.
 type FundLiveMetrics struct {
-	MTLMarketPrice     *string `json:"mtl_market_price,omitempty"`
-	MTLCirculation     *string `json:"mtl_circulation,omitempty"`
-	MTLRECTCirculation *string `json:"mtlrect_circulation,omitempty"`
-	MonthlyDividends   *string `json:"monthly_dividends,omitempty"`
-	EURMTLDailyVolume  *string `json:"eurmtl_daily_volume,omitempty"`
-	EURMTL30dVolume    *string `json:"eurmtl_30d_volume,omitempty"`
-	// Holder counts captured at snapshot time so I24/I27 history is reproducible.
-	EURMTLParticipants *string `json:"eurmtl_participants,omitempty"`
-	MTLShareholders    *string `json:"mtl_shareholders,omitempty"`
+	MTLMarketPrice        *string `json:"mtl_market_price,omitempty"`        // I10
+	MTLRECTMarketPrice    *string `json:"mtlrect_market_price,omitempty"`    // I49
+	MTLCirculation        *string `json:"mtl_circulation,omitempty"`         // I6
+	MTLRECTCirculation    *string `json:"mtlrect_circulation,omitempty"`     // I7
+	MonthlyDividends      *string `json:"monthly_dividends,omitempty"`       // I11
+	EURMTLDailyVolume     *string `json:"eurmtl_daily_volume,omitempty"`     // I25
+	EURMTL30dVolume       *string `json:"eurmtl_30d_volume,omitempty"`       // I26
+	EURMTLParticipants    *string `json:"eurmtl_participants,omitempty"`     // I24
+	MTLShareholders       *string `json:"mtl_shareholders,omitempty"`        // I27
+	MTLShareholdersMedian *string `json:"mtl_shareholders_median,omitempty"` // I23
+	MTLAPHolders          *string `json:"mtlap_holders,omitempty"`           // I40
 }
 
 // FundStructureData is the top-level output of the fund aggregation pipeline.

@@ -3,21 +3,27 @@ package metrics
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/shopspring/decimal"
 
 	"github.com/mtlprog/stat/internal/domain"
+	"github.com/mtlprog/stat/internal/horizon"
+	"github.com/mtlprog/stat/internal/indicator"
 )
 
-// Horizon provides the Horizon API calls needed for live metric computation.
+// fundSlug is the entity slug used by the report flow. Lives here because the
+// metrics service is tightly coupled with the daily report and shares its
+// indicator history.
+const fundSlug = "mtlf"
+
+// Horizon provides the Horizon API calls required to capture live metrics.
 type Horizon interface {
-	FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
-	FetchAllPoolReservesForAsset(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error)
+	FetchAssetStats(ctx context.Context, asset domain.AssetInfo) (horizon.AssetStats, error)
+	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
 	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
 	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
-	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
-	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
 }
 
 // PriceSource provides market price lookups.
@@ -25,139 +31,261 @@ type PriceSource interface {
 	GetBidPrice(ctx context.Context, asset, baseAsset domain.AssetInfo) (decimal.Decimal, error)
 }
 
-// Service computes live metrics and injects them into FundStructureData at snapshot generation time,
-// enabling accurate period-over-period comparison without live Horizon calls on historical snapshots.
+// Service captures live metrics and writes them to FundStructureData.LiveMetrics.
+// It is the single point of contact with Horizon for snapshot-time live values —
+// indicator calculators downstream read only from LiveMetrics, never Horizon.
 type Service struct {
 	horizon   Horizon
 	price     PriceSource
+	indicator indicator.Repository
 	fundAddrs []string
 }
 
-// NewService creates a new metrics Service.
-func NewService(h Horizon, p PriceSource, fundAddrs []string) *Service {
-	return &Service{horizon: h, price: p, fundAddrs: fundAddrs}
+// NewService creates a new metrics Service. indicatorRepo is required for the
+// sticky-fallback path (reusing the prior day's value when a fetch fails) and
+// for the I26 incremental computation; passing nil disables both behaviours.
+func NewService(h Horizon, p PriceSource, indicatorRepo indicator.Repository, fundAddrs []string) *Service {
+	return &Service{
+		horizon:   h,
+		price:     p,
+		indicator: indicatorRepo,
+		fundAddrs: fundAddrs,
+	}
 }
 
-// EnrichMetrics computes I10, I6, I7, I11, I25, and I26 and stores them in data.LiveMetrics.
-// Errors are logged and skipped; partial metrics are still stored.
-func (s *Service) EnrichMetrics(ctx context.Context, data *domain.FundStructureData) error {
+// EnrichMetrics computes all live indicators (I6, I7, I10, I11, I23-I27, I40, I49)
+// for the snapshot dated `date` and stores them in data.LiveMetrics. On any
+// fetch failure it logs an error and falls back to the prior day's persisted
+// value, never zero.
+func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domain.FundStructureData) error {
+	prev := s.priorMetrics(ctx, date)
 	m := &domain.FundLiveMetrics{}
 
-	// I10: MTL market price (bid price on DEX)
 	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
-	if bid, err := s.price.GetBidPrice(ctx, mtlAsset, domain.EURMTLAsset()); err != nil {
-		slog.Warn("metrics: failed to fetch MTL bid price", "error", err)
-	} else {
-		v := bid.String()
-		m.MTLMarketPrice = &v
-	}
-
-	// I6: MTL in circulation = total supply - AMM pool reserves
-	if c, err := s.fetchCirculation(ctx, mtlAsset); err != nil {
-		slog.Warn("metrics: failed to compute MTL circulation", "error", err)
-	} else {
-		v := c.String()
-		m.MTLCirculation = &v
-	}
-
-	// I7: MTLRECT in circulation = total supply - AMM pool reserves
 	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
-	if c, err := s.fetchCirculation(ctx, mtlrectAsset); err != nil {
-		slog.Warn("metrics: failed to compute MTLRECT circulation", "error", err)
+	mtlapAsset := domain.MTLAPAsset()
+	eurmtlAsset := domain.EURMTLAsset()
+
+	// /assets stats — one HTTP call per asset gives circulation and holder count.
+	if circ, ok := s.fetchCirculation(ctx, mtlAsset); ok {
+		m.MTLCirculation = ptr(circ.String())
 	} else {
-		v := c.String()
-		m.MTLRECTCirculation = &v
+		m.MTLCirculation = pickPrior(prev, 6)
+	}
+	if circ, ok := s.fetchCirculation(ctx, mtlrectAsset); ok {
+		m.MTLRECTCirculation = ptr(circ.String())
+	} else {
+		m.MTLRECTCirculation = pickPrior(prev, 7)
+	}
+	if stats, err := s.horizon.FetchAssetStats(ctx, eurmtlAsset); err != nil {
+		slog.Error("metrics: fetch EURMTL stats failed, reusing prior I24", "error", err)
+		m.EURMTLParticipants = pickPrior(prev, 24)
+	} else {
+		m.EURMTLParticipants = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
+	}
+	if stats, err := s.horizon.FetchAssetStats(ctx, mtlapAsset); err != nil {
+		slog.Error("metrics: fetch MTLAP stats failed, reusing prior I40", "error", err)
+		m.MTLAPHolders = pickPrior(prev, 40)
+	} else {
+		m.MTLAPHolders = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
 	}
 
-	// I11: Monthly dividends — sum EURMTL outflows with "div" memo across all fund accounts.
-	// Dividends may be paid from APART or other fund accounts, not just the issuer.
-	totalDivs := decimal.Zero
-	for _, addr := range s.fundAddrs {
-		d, err := s.horizon.FetchMonthlyEURMTLOutflow(ctx, addr, s.fundAddrs)
-		if err != nil {
-			slog.Warn("metrics: failed to fetch dividends from account", "account", addr, "error", err)
-			continue
-		}
-		totalDivs = totalDivs.Add(d)
-	}
-	divV := totalDivs.String()
-	m.MonthlyDividends = &divV
-
-	// I25: EURMTL daily payment volume
-	if dailyVol, err := s.horizon.FetchEURMTLPaymentVolume(ctx, time.Now().AddDate(0, 0, -1)); err != nil {
-		slog.Warn("metrics: failed to fetch EURMTL daily volume", "error", err)
+	// I27 (count) and I23 (median) come from the same paginated holder walk.
+	if count, median, ok := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset); ok {
+		m.MTLShareholders = ptr(decimal.NewFromInt(int64(count)).String())
+		m.MTLShareholdersMedian = ptr(median.String())
 	} else {
-		dv := dailyVol.String()
-		m.EURMTLDailyVolume = &dv
+		m.MTLShareholders = pickPrior(prev, 27)
+		m.MTLShareholdersMedian = pickPrior(prev, 23)
 	}
 
-	// I26: EURMTL 30d payment volume
-	if vol30d, err := s.horizon.FetchEURMTLPaymentVolume(ctx, time.Now().AddDate(0, 0, -30)); err != nil {
-		slog.Warn("metrics: failed to fetch EURMTL 30d volume", "error", err)
+	// I11: monthly dividends from issuer only.
+	if div, err := s.horizon.FetchMonthlyEURMTLOutflow(ctx, domain.IssuerAddress, s.fundAddrs); err != nil {
+		slog.Error("metrics: fetch monthly dividends failed, reusing prior I11", "error", err)
+		m.MonthlyDividends = pickPrior(prev, 11)
 	} else {
-		mv := vol30d.String()
-		m.EURMTL30dVolume = &mv
+		m.MonthlyDividends = ptr(div.String())
 	}
 
-	// I24: EURMTL participants — accounts with non-zero EURMTL balance.
-	minNonZero := decimal.New(1, -7)
-	if count, err := s.horizon.FetchAssetHolderCountByBalance(ctx, domain.EURMTLAsset(), minNonZero); err != nil {
-		slog.Warn("metrics: failed to fetch EURMTL participants", "error", err)
+	// I25: EURMTL payment volume over the prior 24h.
+	dailyVol, dailyOK := s.fetchDailyVolume(ctx, date)
+	if dailyOK {
+		m.EURMTLDailyVolume = ptr(dailyVol.String())
 	} else {
-		v := decimal.NewFromInt(int64(count)).String()
-		m.EURMTLParticipants = &v
+		m.EURMTLDailyVolume = pickPrior(prev, 25)
 	}
 
-	// I27: MTL shareholders — unique accounts holding >=1 MTL or MTLRECT.
-	if count, err := s.fetchMTLShareholders(ctx); err != nil {
-		slog.Warn("metrics: failed to fetch MTL shareholders", "error", err)
+	// I26: incremental from yesterday's I26 + today's I25 − I25 from 30 days ago.
+	// Falls back to yesterday's I26 if any input is missing.
+	m.EURMTL30dVolume = s.computeI26(ctx, date, dailyVol, dailyOK, prev)
+
+	// Bid prices.
+	if bid, err := s.price.GetBidPrice(ctx, mtlAsset, eurmtlAsset); err != nil {
+		slog.Error("metrics: fetch MTL bid price failed, reusing prior I10", "error", err)
+		m.MTLMarketPrice = pickPrior(prev, 10)
 	} else {
-		v := decimal.NewFromInt(int64(count)).String()
-		m.MTLShareholders = &v
+		m.MTLMarketPrice = ptr(bid.String())
+	}
+	if bid, err := s.price.GetBidPrice(ctx, mtlrectAsset, eurmtlAsset); err != nil {
+		slog.Error("metrics: fetch MTLRECT bid price failed, reusing prior I49", "error", err)
+		m.MTLRECTMarketPrice = pickPrior(prev, 49)
+	} else {
+		m.MTLRECTMarketPrice = ptr(bid.String())
 	}
 
 	data.LiveMetrics = m
 	return nil
 }
 
-// fetchMTLShareholders returns the number of unique accounts holding >=1 MTL or MTLRECT.
-// Mirrors the I27 logic in TokenomicsCalculator: union by account ID across both assets.
-func (s *Service) fetchMTLShareholders(ctx context.Context) (int, error) {
+// priorMetrics loads the latest indicator set strictly before `date` for use as
+// sticky-fallback. Returns nil if the repository is unset or has no prior data.
+func (s *Service) priorMetrics(ctx context.Context, date time.Time) map[int]indicator.Indicator {
+	if s.indicator == nil {
+		return nil
+	}
+	prev, err := s.indicator.GetNearestBefore(ctx, fundSlug, date.AddDate(0, 0, -1))
+	if err != nil {
+		slog.Error("metrics: load prior indicators for fallback failed", "error", err)
+		return nil
+	}
+	return prev
+}
+
+// fetchCirculation derives circulating supply from a single /assets call:
+// total supply minus AMM-pool reserves. Returns ok=false on fetch failure.
+func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, bool) {
+	stats, err := s.horizon.FetchAssetStats(ctx, asset)
+	if err != nil {
+		slog.Error("metrics: fetch asset stats failed", "asset", asset.Code, "error", err)
+		return decimal.Zero, false
+	}
+	c := stats.TotalSupply.Sub(stats.LiquidityPools)
+	if c.IsNegative() {
+		c = decimal.Zero
+	}
+	return c, true
+}
+
+// fetchShareholderStats walks all MTL and MTLRECT holders with balance ≥1 and
+// returns the count of unique holders and the median per-holder total.
+// One paginated sweep per asset; both asset failures result in ok=false.
+func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAsset domain.AssetInfo) (int, decimal.Decimal, bool) {
 	minOne := decimal.NewFromInt(1)
-	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
-	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
 
 	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(ctx, mtlAsset, minOne)
 	if err != nil {
-		return 0, err
+		slog.Error("metrics: fetch MTL holders failed", "error", err)
+		return 0, decimal.Zero, false
 	}
 	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(ctx, mtlrectAsset, minOne)
 	if err != nil {
-		return 0, err
+		slog.Error("metrics: fetch MTLRECT holders failed", "error", err)
+		return 0, decimal.Zero, false
 	}
 
-	holders := make(map[string]struct{}, len(mtl)+len(mtlrect))
-	for id := range mtl {
-		holders[id] = struct{}{}
+	merged := make(map[string]decimal.Decimal, len(mtl)+len(mtlrect))
+	for id, bal := range mtl {
+		merged[id] = bal
 	}
-	for id := range mtlrect {
-		holders[id] = struct{}{}
+	for id, bal := range mtlrect {
+		merged[id] = merged[id].Add(bal)
 	}
-	return len(holders), nil
+
+	values := make([]decimal.Decimal, 0, len(merged))
+	for _, bal := range merged {
+		values = append(values, bal)
+	}
+	return len(merged), median(values), true
 }
 
-func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error) {
-	total, err := s.horizon.FetchAssetAmount(ctx, asset)
+// fetchDailyVolume returns total EURMTL payment volume in the 24h window
+// preceding `date`.
+func (s *Service) fetchDailyVolume(ctx context.Context, date time.Time) (decimal.Decimal, bool) {
+	since := date.AddDate(0, 0, -1)
+	vol, err := s.horizon.FetchEURMTLPaymentVolume(ctx, since)
 	if err != nil {
-		return decimal.Zero, err
+		slog.Error("metrics: fetch EURMTL daily volume failed", "error", err)
+		return decimal.Zero, false
 	}
-	pools, err := s.horizon.FetchAllPoolReservesForAsset(ctx, asset)
+	return vol, true
+}
+
+// computeI26 produces the rolling 30-day EURMTL volume by subtracting the
+// daily volume from 30 days ago and adding today's. Falls back to yesterday's
+// I26 if any input is missing — never produces a 0 from a fetch gap.
+func (s *Service) computeI26(ctx context.Context, date time.Time, dailyVol decimal.Decimal, dailyOK bool, prev map[int]indicator.Indicator) *string {
+	yesterday30d := pickPrior(prev, 26)
+	if !dailyOK || yesterday30d == nil {
+		if yesterday30d == nil {
+			slog.Error("metrics: no prior I26 in DB, skipping incremental — calculator will see 0")
+		}
+		return yesterday30d
+	}
+
+	thirtyDayHist := s.lookup(ctx, 25, date.AddDate(0, 0, -30))
+	if thirtyDayHist == nil {
+		slog.Error("metrics: no I25 from 30 days ago, reusing prior I26", "target", date.AddDate(0, 0, -30).Format("2006-01-02"))
+		return yesterday30d
+	}
+
+	prevVal := domain.SafeParse(*yesterday30d)
+	out := prevVal.Add(dailyVol).Sub(*thirtyDayHist)
+	if out.IsNegative() {
+		out = decimal.Zero
+	}
+	return ptr(out.String())
+}
+
+// lookup returns indicator `id` at-or-before `target` from the repository,
+// or nil if missing.
+func (s *Service) lookup(ctx context.Context, id int, target time.Time) *decimal.Decimal {
+	if s.indicator == nil {
+		return nil
+	}
+	res, err := s.indicator.GetNearestBefore(ctx, fundSlug, target)
 	if err != nil {
-		return decimal.Zero, err
+		slog.Error("metrics: lookup historical indicator failed", "id", id, "target", target.Format("2006-01-02"), "error", err)
+		return nil
 	}
-	c := total.Sub(pools)
-	if c.IsNegative() {
-		return decimal.Zero, nil
+	if res == nil {
+		return nil
 	}
-	return c, nil
+	ind, ok := res[id]
+	if !ok {
+		return nil
+	}
+	return &ind.Value
+}
+
+// pickPrior returns the prior day's value for the given indicator ID as a
+// *string suitable for FundLiveMetrics fields. Nil if the prior set or ID is
+// missing.
+func pickPrior(prev map[int]indicator.Indicator, id int) *string {
+	if prev == nil {
+		return nil
+	}
+	ind, ok := prev[id]
+	if !ok {
+		return nil
+	}
+	v := ind.Value.String()
+	return &v
+}
+
+func ptr(s string) *string { return &s }
+
+// median returns the middle value of values, averaging the two middle elements
+// if the count is even. Returns zero for an empty slice.
+func median(values []decimal.Decimal) decimal.Decimal {
+	n := len(values)
+	if n == 0 {
+		return decimal.Zero
+	}
+	sorted := make([]decimal.Decimal, n)
+	copy(sorted, values)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].LessThan(sorted[j]) })
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return sorted[n/2-1].Add(sorted[n/2]).Div(decimal.NewFromInt(2))
 }
