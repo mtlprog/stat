@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -102,120 +101,28 @@ func TestAnalyticsCalculatorZeroPriceYearAgo(t *testing.T) {
 	}
 }
 
-type mockTokenomicsHorizon struct {
-	holders        map[string]int
-	holderBalances map[string]map[string]decimal.Decimal // asset code → account_id → balance
-	paymentVolume  decimal.Decimal
-}
-
-func (m *mockTokenomicsHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
-	if count, ok := m.holders[asset.Code]; ok {
-		return count, nil
-	}
-	return 0, nil
-}
-
-func (m *mockTokenomicsHorizon) FetchAssetHolderBalancesByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (map[string]decimal.Decimal, error) {
-	if bals, ok := m.holderBalances[asset.Code]; ok {
-		return bals, nil
-	}
-	return nil, nil
-}
-
-func (m *mockTokenomicsHorizon) FetchEURMTLPaymentVolume(_ context.Context, _ time.Time) (decimal.Decimal, error) {
-	return m.paymentVolume, nil
-}
-
-func TestTokenomicsCalculatorWithHorizon(t *testing.T) {
-	calc := &TokenomicsCalculator{
-		Horizon: &mockTokenomicsHorizon{
-			holders: map[string]int{
-				"EURMTL": 150,
-				"MTLAP":  42,
-			},
-			holderBalances: map[string]map[string]decimal.Decimal{
-				"MTL": {
-					"A": decimal.NewFromInt(100),
-					"B": decimal.NewFromInt(200),
-					"C": decimal.NewFromInt(300),
-				},
-				"MTLRECT": {
-					"B": decimal.NewFromInt(50),
-					"D": decimal.NewFromInt(150),
-				},
-			},
-			paymentVolume: decimal.NewFromInt(5000),
-		},
-	}
+func TestTokenomicsCalculatorFromLiveMetrics(t *testing.T) {
+	calc := &TokenomicsCalculator{}
 
 	deps := map[int]Indicator{
 		1: {ID: 1, Value: decimal.NewFromInt(85000)},
 		5: {ID: 5, Value: decimal.NewFromInt(10000)},
 	}
 
-	indicators, err := calc.Calculate(context.Background(), domain.FundStructureData{}, deps, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	indicatorMap := make(map[int]Indicator)
-	for _, ind := range indicators {
-		indicatorMap[ind.ID] = ind
-	}
-
-	// I24: EURMTL holders
-	if !indicatorMap[24].Value.Equal(decimal.NewFromInt(150)) {
-		t.Errorf("I24 = %s, want 150", indicatorMap[24].Value)
-	}
-	// I27: union of MTL(A,B,C) + MTLRECT(B,C,D) = 4 unique holders
-	if !indicatorMap[27].Value.Equal(decimal.NewFromInt(4)) {
-		t.Errorf("I27 = %s, want 4 (union of MTL+MTLRECT holders)", indicatorMap[27].Value)
-	}
-	// I21: Average Shareholding = I5 / I27 = 10000 / 4 = 2500
-	if !indicatorMap[21].Value.Equal(decimal.NewFromInt(2500)) {
-		t.Errorf("I21 = %s, want 2500", indicatorMap[21].Value)
-	}
-	// I22: Average Value per Shareholder = I1 / I27 = 85000 / 4 = 21250
-	if !indicatorMap[22].Value.Equal(decimal.NewFromInt(21250)) {
-		t.Errorf("I22 = %s, want 21250", indicatorMap[22].Value)
-	}
-	// I40: MTLAP holders
-	if !indicatorMap[40].Value.Equal(decimal.NewFromInt(42)) {
-		t.Errorf("I40 = %s, want 42", indicatorMap[40].Value)
-	}
-	// I23: Median shareholding — per-holder merged: A=100, B=250, C=300, D=150
-	// sorted [100, 150, 250, 300] → median = (150+250)/2 = 200
-	if !indicatorMap[23].Value.Equal(decimal.NewFromInt(200)) {
-		t.Errorf("I23 = %s, want 200 (median of per-holder merged MTL+MTLRECT balances)", indicatorMap[23].Value)
-	}
-	// I25: EURMTL daily volume = 5000 (from mock)
-	if !indicatorMap[25].Value.Equal(decimal.NewFromInt(5000)) {
-		t.Errorf("I25 = %s, want 5000", indicatorMap[25].Value)
-	}
-	// I26: EURMTL 30d volume = 5000 (from mock, same call)
-	if !indicatorMap[26].Value.Equal(decimal.NewFromInt(5000)) {
-		t.Errorf("I26 = %s, want 5000", indicatorMap[26].Value)
-	}
-}
-
-func TestTokenomicsCalculatorLiveMetricsPreferred(t *testing.T) {
-	calc := &TokenomicsCalculator{
-		Horizon: &mockTokenomicsHorizon{
-			paymentVolume: decimal.NewFromInt(9999), // should NOT be used
-		},
-	}
-
-	deps := map[int]Indicator{
-		1: {ID: 1, Value: decimal.NewFromInt(85000)},
-		5: {ID: 5, Value: decimal.NewFromInt(10000)},
-	}
-
+	holders := "4"
+	median := "200"
+	participants := "150"
+	mtlap := "42"
 	dailyVol := "1234.56"
 	vol30d := "56789.01"
 	data := domain.FundStructureData{
 		LiveMetrics: &domain.FundLiveMetrics{
-			EURMTLDailyVolume: &dailyVol,
-			EURMTL30dVolume:   &vol30d,
+			MTLShareholders:       &holders,
+			MTLShareholdersMedian: &median,
+			EURMTLParticipants:    &participants,
+			MTLAPHolders:          &mtlap,
+			EURMTLDailyVolume:     &dailyVol,
+			EURMTL30dVolume:       &vol30d,
 		},
 	}
 
@@ -224,23 +131,34 @@ func TestTokenomicsCalculatorLiveMetricsPreferred(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	indicatorMap := make(map[int]Indicator)
+	got := make(map[int]Indicator)
 	for _, ind := range indicators {
-		indicatorMap[ind.ID] = ind
+		got[ind.ID] = ind
 	}
 
-	// I25: should use stored value, not Horizon mock
-	if !indicatorMap[25].Value.Equal(decimal.RequireFromString("1234.56")) {
-		t.Errorf("I25 = %s, want 1234.56 (from LiveMetrics, not Horizon)", indicatorMap[25].Value)
+	expectations := []struct {
+		id   int
+		want decimal.Decimal
+		desc string
+	}{
+		{24, decimal.NewFromInt(150), "EURMTL holders"},
+		{27, decimal.NewFromInt(4), "MTL+MTLRECT shareholders"},
+		{21, decimal.NewFromInt(2500), "I5/I27"},
+		{22, decimal.NewFromInt(21250), "I1/I27"},
+		{40, decimal.NewFromInt(42), "MTLAP holders"},
+		{23, decimal.NewFromInt(200), "median shareholding"},
+		{25, decimal.RequireFromString("1234.56"), "EURMTL daily volume"},
+		{26, decimal.RequireFromString("56789.01"), "EURMTL 30d volume"},
 	}
-	// I26: should use stored value, not Horizon mock
-	if !indicatorMap[26].Value.Equal(decimal.RequireFromString("56789.01")) {
-		t.Errorf("I26 = %s, want 56789.01 (from LiveMetrics, not Horizon)", indicatorMap[26].Value)
+	for _, e := range expectations {
+		if !got[e.id].Value.Equal(e.want) {
+			t.Errorf("I%d (%s) = %s, want %s", e.id, e.desc, got[e.id].Value, e.want)
+		}
 	}
 }
 
-func TestTokenomicsCalculatorNilHorizon(t *testing.T) {
-	calc := &TokenomicsCalculator{Horizon: nil}
+func TestTokenomicsCalculatorMissingLiveMetrics(t *testing.T) {
+	calc := &TokenomicsCalculator{}
 
 	deps := map[int]Indicator{
 		1: {ID: 1, Value: decimal.NewFromInt(85000)},
@@ -254,7 +172,7 @@ func TestTokenomicsCalculatorNilHorizon(t *testing.T) {
 
 	for _, ind := range indicators {
 		if !ind.Value.IsZero() {
-			t.Errorf("I%d = %s, want 0 (nil Horizon)", ind.ID, ind.Value)
+			t.Errorf("I%d = %s, want 0 (no LiveMetrics)", ind.ID, ind.Value)
 		}
 	}
 }

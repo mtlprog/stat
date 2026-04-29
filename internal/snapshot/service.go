@@ -19,7 +19,7 @@ type FundStructureService interface {
 // This enables accurate period-over-period comparison by storing values that would otherwise
 // require live Horizon queries, which are unavailable for historical snapshots.
 type MetricsEnricher interface {
-	EnrichMetrics(ctx context.Context, data *domain.FundStructureData) error
+	EnrichMetrics(ctx context.Context, date time.Time, data *domain.FundStructureData) error
 }
 
 // Service manages snapshot generation and retrieval.
@@ -52,8 +52,8 @@ func (s *Service) Generate(ctx context.Context, slug string, date time.Time) (do
 	}
 
 	if s.enricher != nil {
-		if err := s.enricher.EnrichMetrics(ctx, &fundData); err != nil {
-			slog.Warn("failed to enrich snapshot with live metrics", "error", err)
+		if err := s.enricher.EnrichMetrics(ctx, date, &fundData); err != nil {
+			slog.Error("failed to enrich snapshot with live metrics", "error", err)
 		}
 	}
 
