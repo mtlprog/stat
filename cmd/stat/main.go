@@ -141,8 +141,15 @@ func runQuote(c *cli.Context) error {
 	return nil
 }
 
+// reportTimeout caps the daily report run. Anything longer is a regression we
+// want surfaced as a non-zero exit so Railway alerts the maintainer instead of
+// silently overlapping with the next day's cron.
+const reportTimeout = 30 * time.Minute
+
 func runReport(c *cli.Context) error {
-	ctx := c.Context
+	ctx, cancel := context.WithTimeout(c.Context, reportTimeout)
+	defer cancel()
+
 	cfg := config.Load()
 
 	if cfg.DatabaseURL == "" {
@@ -171,11 +178,12 @@ func runReport(c *cli.Context) error {
 	fundSvc := fund.NewService(portfolioSvc, priceSvc, valuationSvc, externalSvc)
 
 	snapshotRepo := snapshot.NewPgRepository(pool)
+	indicatorRepo := indicator.NewPgRepository(pool)
 	var fundAddrs []string
 	for _, a := range domain.AccountRegistry() {
 		fundAddrs = append(fundAddrs, a.Address)
 	}
-	metricsSvc := metrics.NewService(horizonClient, priceSvc, fundAddrs)
+	metricsSvc := metrics.NewService(horizonClient, priceSvc, indicatorRepo, fundAddrs)
 	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo, metricsSvc)
 
 	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {
@@ -185,49 +193,74 @@ func runReport(c *cli.Context) error {
 	now := time.Now().UTC()
 	date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
+	stage := startStage("snapshot_generate")
 	data, err := snapshotSvc.Generate(ctx, "mtlf", date)
 	if err != nil {
 		return fmt.Errorf("generating snapshot: %w", err)
 	}
-	slog.Info("snapshot generated successfully", "date", date.Format("2006-01-02"))
+	stage.done("date", date.Format("2006-01-02"))
 
 	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
-	indicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+	indicatorSvc := indicator.NewService(hist)
 
+	stage = startStage("indicator_calculate")
 	indicators, err := indicatorSvc.CalculateAll(ctx, data)
 	if err != nil {
 		return fmt.Errorf("calculating indicators: %w", err)
 	}
+	stage.done("count", len(indicators))
 
 	entityID, err := snapshotRepo.GetEntityID(ctx, "mtlf")
 	if err != nil {
 		return fmt.Errorf("getting entity id for indicator persistence: %w", err)
 	}
-	indicatorRepo := indicator.NewPgRepository(pool)
+
+	stage = startStage("indicator_persist")
 	if err := indicatorRepo.Save(ctx, entityID, date, indicators); err != nil {
 		return fmt.Errorf("persisting indicators: %w", err)
 	}
-	slog.Info("indicators persisted", "count", len(indicators), "date", date.Format("2006-01-02"))
+	stage.done("count", len(indicators), "date", date.Format("2006-01-02"))
 
 	if cfg.GoogleSheetsSpreadsheetID != "" && cfg.GoogleCredentialsJSON != "" {
 		sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
 		if err != nil {
 			return fmt.Errorf("initializing Google Sheets writer: %w", err)
 		}
-		exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
-		rows, err := exportSvc.ExportPrecomputed(ctx, indicators)
+		exportSvc := export.NewService(indicatorRepo, sheetsWriter)
+
+		stage = startStage("sheets_export_indall")
+		rows, err := exportSvc.Export(ctx, indicators)
 		if err != nil {
 			return fmt.Errorf("exporting to Google Sheets: %w", err)
 		}
-		slog.Info("Google Sheets IND_ALL/IND_MAIN export completed")
+		stage.done()
 
+		stage = startStage("sheets_append_monitoring")
 		if err := sheetsWriter.AppendMonitoring(ctx, rows); err != nil {
 			return fmt.Errorf("appending MONITORING row: %w", err)
 		}
-		slog.Info("Google Sheets MONITORING row appended")
+		stage.done()
 	}
 
 	return nil
+}
+
+// stageTimer captures the duration of a discrete report stage and emits an
+// info-level summary on done(). Used to spot which step blew past its budget.
+type stageTimer struct {
+	name  string
+	start time.Time
+}
+
+func startStage(name string) stageTimer {
+	slog.Info("stage started", "name", name)
+	return stageTimer{name: name, start: time.Now()}
+}
+
+func (s stageTimer) done(extra ...any) {
+	args := []any{"name", s.name, "duration_ms", time.Since(s.start).Milliseconds()}
+	args = append(args, extra...)
+	slog.Info("stage completed", args...)
 }
 
 func runImport(c *cli.Context) error {
@@ -250,6 +283,7 @@ func runImport(c *cli.Context) error {
 	}
 
 	snapshotRepo := snapshot.NewPgRepository(pool)
+	indicatorRepo := indicator.NewPgRepository(pool)
 	entityID, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics")
 	if err != nil {
 		return fmt.Errorf("ensuring entity: %w", err)
@@ -319,8 +353,6 @@ func runImport(c *cli.Context) error {
 		return nil
 	}
 
-	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
-	priceSvc := price.NewService(horizonClient)
 	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
 
 	sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
@@ -328,16 +360,13 @@ func runImport(c *cli.Context) error {
 		return fmt.Errorf("initializing Google Sheets writer: %w", err)
 	}
 
-	// Two indicator services: partial (nil Horizon) for old snapshots,
-	// full (with Horizon) for snapshots that have live_metrics.
-	partialIndicatorSvc := indicator.NewService(nil, nil, hist)
-	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+	indicatorSvc := indicator.NewService(hist)
 
-	// IDs that produce correct values from snapshot data alone, even when Horizon
-	// is nil. Layer0 (I51-I53, I56, I58-I61) reads only account balances/prices stored
-	// in the snapshot. Layer1 I3 (Assets Value) and I4 (Operating Balance) depend
-	// on Layer0 outputs, not on Horizon. Other Layer1+ indicators (I5-I7, I10, etc.)
-	// require Horizon for circulation/dividend data and will be zero — excluded here.
+	// IDs that produce correct values from snapshot data alone. Layer0 (I51-I53,
+	// I56, I58-I61) reads only account balances/prices stored in the snapshot.
+	// Layer1 I3 (Assets Value) and I4 (Operating Balance) depend on Layer0 outputs.
+	// Other Layer1+ indicators (I5-I7, I10, etc.) require live_metrics — for legacy
+	// snapshots without that block they resolve to zero and we omit them.
 	snapshotOnlyIDs := map[int]bool{
 		3: true, 4: true,
 		51: true, 52: true, 53: true, 56: true, 58: true, 59: true, 60: true, 61: true,
@@ -358,36 +387,31 @@ func runImport(c *cli.Context) error {
 
 		snap, err := snapshotRepo.GetByDate(ctx, "mtlf", date)
 		if err != nil {
-			slog.Warn("monitoring: snapshot not found", "date", date.Format("2006-01-02"), "error", err)
+			slog.Debug("monitoring: snapshot not found", "date", date.Format("2006-01-02"), "error", err)
 			continue
 		}
 
 		var fundData domain.FundStructureData
 		if err := json.Unmarshal(snap.Data, &fundData); err != nil {
-			slog.Warn("monitoring: failed to unmarshal snapshot", "date", date.Format("2006-01-02"), "error", err)
+			slog.Error("monitoring: failed to unmarshal snapshot", "date", date.Format("2006-01-02"), "error", err)
 			continue
 		}
 
-		// Snapshots with live_metrics get full indicator calculation;
-		// old snapshots without it get only snapshot-computable indicators.
+		// Snapshots with live_metrics get the full indicator set; legacy snapshots
+		// without it get only the snapshot-computable subset (Layer0 + I3/I4).
 		hasLiveMetrics := fundData.LiveMetrics != nil
-		var rows []export.IndicatorRow
+		indicators, err := indicatorSvc.CalculateAll(ctx, fundData)
+		if err != nil {
+			slog.Error("monitoring: failed to calculate indicators", "date", date.Format("2006-01-02"), "error", err)
+			continue
+		}
 
+		var rows []export.IndicatorRow
 		if hasLiveMetrics {
-			indicators, err := fullIndicatorSvc.CalculateAll(ctx, fundData)
-			if err != nil {
-				slog.Warn("monitoring: failed to calculate indicators", "date", date.Format("2006-01-02"), "error", err)
-				continue
-			}
 			rows = lo.Map(indicators, func(ind indicator.Indicator, _ int) export.IndicatorRow {
 				return export.IndicatorRow{Indicator: ind}
 			})
 		} else {
-			indicators, err := partialIndicatorSvc.CalculateAll(ctx, fundData)
-			if err != nil {
-				slog.Warn("monitoring: failed to calculate indicators", "date", date.Format("2006-01-02"), "error", err)
-				continue
-			}
 			rows = lo.FilterMap(indicators, func(ind indicator.Indicator, _ int) (export.IndicatorRow, bool) {
 				if !snapshotOnlyIDs[ind.ID] {
 					return export.IndicatorRow{}, false
@@ -397,7 +421,7 @@ func runImport(c *cli.Context) error {
 		}
 
 		if err := sheetsWriter.AppendMonitoringRowOnly(ctx, rows, date); err != nil {
-			slog.Warn("monitoring: failed to append row", "date", date.Format("2006-01-02"), "error", err)
+			slog.Error("monitoring: failed to append row", "date", date.Format("2006-01-02"), "error", err)
 			continue
 		}
 
@@ -409,12 +433,11 @@ func runImport(c *cli.Context) error {
 
 	// Apply MONITORING formatting once after all rows are written.
 	if err := sheetsWriter.ApplyMonitoringFormatting(ctx); err != nil {
-		slog.Warn("failed to apply MONITORING formatting", "error", err)
+		slog.Error("failed to apply MONITORING formatting", "error", err)
 	}
 
 	// Update IND_ALL / IND_MAIN with current data.
-	indicatorSvc := fullIndicatorSvc
-	exportSvc := export.NewService(indicatorSvc, snapshotRepo, sheetsWriter)
+	exportSvc := export.NewService(indicatorRepo, sheetsWriter)
 
 	latestSnap, err := snapshotRepo.GetLatest(ctx, "mtlf")
 	if err != nil {
@@ -426,7 +449,12 @@ func runImport(c *cli.Context) error {
 		return fmt.Errorf("unmarshaling latest snapshot: %w", err)
 	}
 
-	if _, err := exportSvc.Export(ctx, latestData); err != nil {
+	latestIndicators, err := indicatorSvc.CalculateAll(ctx, latestData)
+	if err != nil {
+		return fmt.Errorf("calculating latest indicators for export: %w", err)
+	}
+
+	if _, err := exportSvc.Export(ctx, latestIndicators); err != nil {
 		return fmt.Errorf("exporting to Google Sheets: %w", err)
 	}
 	slog.Info("Google Sheets IND_ALL/IND_MAIN export completed")
@@ -607,10 +635,9 @@ func runImportExcel(c *cli.Context) error {
 	}
 
 	snapshotRepo := snapshot.NewPgRepository(pool)
-	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
-	priceSvc := price.NewService(horizonClient)
+	indicatorRepo := indicator.NewPgRepository(pool)
 	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
-	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
+	fullIndicatorSvc := indicator.NewService(hist)
 
 	// Iterate day by day from lastExcelDate+1 to today.
 	const maxConsecutiveErrors = 5
@@ -627,7 +654,7 @@ func runImportExcel(c *cli.Context) error {
 				continue
 			}
 			consecutiveErrors++
-			slog.Warn("database error fetching snapshot", "date", d.Format("2006-01-02"), "error", err)
+			slog.Error("database error fetching snapshot", "date", d.Format("2006-01-02"), "error", err)
 			if consecutiveErrors >= maxConsecutiveErrors {
 				return fmt.Errorf("aborting after %d consecutive errors, last: %w", consecutiveErrors, err)
 			}
@@ -637,13 +664,13 @@ func runImportExcel(c *cli.Context) error {
 
 		var fundData domain.FundStructureData
 		if err := json.Unmarshal(snap.Data, &fundData); err != nil {
-			slog.Warn("failed to unmarshal snapshot", "date", d.Format("2006-01-02"), "error", err)
+			slog.Error("failed to unmarshal snapshot", "date", d.Format("2006-01-02"), "error", err)
 			continue
 		}
 
 		indicators, err := fullIndicatorSvc.CalculateAll(ctx, fundData)
 		if err != nil {
-			slog.Warn("failed to calculate indicators", "date", d.Format("2006-01-02"), "error", err)
+			slog.Error("failed to calculate indicators", "date", d.Format("2006-01-02"), "error", err)
 			continue
 		}
 
@@ -652,7 +679,7 @@ func runImportExcel(c *cli.Context) error {
 		})
 
 		if err := sheetsWriter.AppendMonitoringRowOnly(ctx, rows, d); err != nil {
-			slog.Warn("failed to append MONITORING row", "date", d.Format("2006-01-02"), "error", err)
+			slog.Error("failed to append MONITORING row", "date", d.Format("2006-01-02"), "error", err)
 			continue
 		}
 
@@ -687,9 +714,14 @@ func runImportExcel(c *cli.Context) error {
 		return fmt.Errorf("unmarshaling latest snapshot: %w", err)
 	}
 
-	exportSvc := export.NewService(fullIndicatorSvc, snapshotRepo, sheetsWriter)
+	latestIndicators, err := fullIndicatorSvc.CalculateAll(ctx, latestData)
+	if err != nil {
+		return fmt.Errorf("calculating latest indicators for export: %w", err)
+	}
+
+	exportSvc := export.NewService(indicatorRepo, sheetsWriter)
 	monHist := buildMonitoringHistory(excelRows)
-	if _, err := exportSvc.ExportWithHistory(ctx, latestData, monHist); err != nil {
+	if _, err := exportSvc.ExportWithHistory(ctx, latestIndicators, monHist); err != nil {
 		return fmt.Errorf("exporting to Google Sheets: %w", err)
 	}
 	slog.Info("Google Sheets IND_ALL/IND_MAIN export completed")
@@ -734,7 +766,7 @@ func readExcelMonitoring(filePath string) ([][]any, time.Time, error) {
 				// Date column: parse and format as dd.mm.yyyy for Google Sheets.
 				t, err := parseExcelDate(cellVal)
 				if err != nil {
-					slog.Warn("skipping row with unparseable date", "row", rowIdx+1, "value", cellVal, "error", err)
+					slog.Debug("skipping row with unparseable date", "row", rowIdx+1, "value", cellVal, "error", err)
 					row = nil
 					break
 				}
@@ -758,7 +790,7 @@ func readExcelMonitoring(filePath string) ([][]any, time.Time, error) {
 	}
 
 	if suppressedErrors > 0 {
-		slog.Warn("suppressed Excel error values during import",
+		slog.Info("suppressed Excel error values during import",
 			"count", suppressedErrors,
 			"explanation", "cells with # prefixes (e.g. #REF!, #DIV/0!) replaced with nil",
 		)
@@ -845,7 +877,7 @@ func buildMonitoringHistory(excelRows [][]any) export.MonitoringHistory {
 	}
 
 	if skipped := skippedNoDate + skippedParseFail + skippedNoVals; skipped > 0 {
-		slog.Warn("buildMonitoringHistory: skipped rows",
+		slog.Info("buildMonitoringHistory: skipped rows",
 			"parsed", len(hist),
 			"skippedNoDate", skippedNoDate,
 			"skippedParseFail", skippedParseFail,
@@ -924,7 +956,7 @@ func runImportIndicatorsFromSheets(c *cli.Context) error {
 		}
 		date, err := parseSheetDate(dateStr)
 		if err != nil {
-			slog.Warn("skipping row with unparseable date", "rowIndex", i+1, "value", dateStr, "error", err)
+			slog.Debug("skipping row with unparseable date", "rowIndex", i+1, "value", dateStr, "error", err)
 			skippedBadDate++
 			continue
 		}
@@ -968,7 +1000,7 @@ func runImportIndicatorsFromSheets(c *cli.Context) error {
 	}
 
 	if suppressedCells > 0 {
-		slog.Warn("suppressed cells with unparseable values during import",
+		slog.Info("suppressed cells with unparseable values during import",
 			"count", suppressedCells,
 			"explanation", "non-numeric, non-error strings or unhandled types — values dropped, not zero-filled",
 		)
@@ -1071,9 +1103,10 @@ func runBackfillIndicators(c *cli.Context) error {
 	// Iterate oldest-first so partial progress is sequential.
 	sort.Slice(metas, func(i, j int) bool { return metas[i].SnapshotDate.Before(metas[j].SnapshotDate) })
 
-	// nil Horizon and price source: non-deterministic indicators will produce zero,
-	// which we then drop via DeterministicIDs.
-	indicatorSvc := indicator.NewService(nil, nil, nil)
+	// Indicators read live values from snapshot.LiveMetrics. Non-deterministic
+	// indicators that lack stored values resolve to zero and are filtered via
+	// DeterministicIDs below.
+	indicatorSvc := indicator.NewService(nil)
 
 	const maxConsecutiveErrors = 5
 	var processed, failed, consecutive int
