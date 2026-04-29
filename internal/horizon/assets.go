@@ -78,7 +78,7 @@ func accountBalanceForAsset(rec horizonAccountRecord, asset domain.AssetInfo) (d
 		if b.AssetCode == asset.Code && b.AssetIssuer == asset.Issuer {
 			v, err := decimal.NewFromString(b.Balance)
 			if err != nil {
-				slog.Warn("failed to parse account balance, skipping",
+				slog.Debug("failed to parse account balance, skipping",
 					"account", rec.AccountID, "asset", asset.Code,
 					"balance", b.Balance, "error", err)
 				return decimal.Zero, false
@@ -176,10 +176,23 @@ func (c *Client) FetchAssetHolderBalancesByBalance(ctx context.Context, asset do
 	return balances, err
 }
 
-// FetchAssetAmount returns the total issued amount of the given asset.
-func (c *Client) FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, error) {
+// AssetStats are the aggregate fields exposed by Horizon's /assets endpoint
+// for a single asset, parsed into Decimal values. One HTTP call yields holder
+// count, total supply, AMM-pool-locked amount, and claimable/contract balances.
+type AssetStats struct {
+	HoldersAuthorized int
+	TotalSupply       decimal.Decimal
+	LiquidityPools    decimal.Decimal
+	ClaimableBalances decimal.Decimal
+	Contracts         decimal.Decimal
+}
+
+// FetchAssetStats returns aggregate stats for the given asset in a single
+// /assets request. Returns a zero-valued AssetStats (no error) if the asset
+// has no record on Horizon.
+func (c *Client) FetchAssetStats(ctx context.Context, asset domain.AssetInfo) (AssetStats, error) {
 	if asset.IsNative() {
-		return decimal.Zero, fmt.Errorf("cannot query amount for native asset")
+		return AssetStats{}, fmt.Errorf("cannot query stats for native asset")
 	}
 
 	params := url.Values{}
@@ -189,31 +202,55 @@ func (c *Client) FetchAssetAmount(ctx context.Context, asset domain.AssetInfo) (
 
 	var resp HorizonAssetsResponse
 	if err := c.getJSON(ctx, "/assets?"+params.Encode(), &resp); err != nil {
-		return decimal.Zero, fmt.Errorf("fetching asset amount for %s: %w", asset.Code, err)
+		return AssetStats{}, fmt.Errorf("fetching asset stats for %s: %w", asset.Code, err)
 	}
 
 	if len(resp.Embedded.Records) == 0 {
-		return decimal.Zero, nil
+		return AssetStats{}, nil
 	}
 
 	rec := resp.Embedded.Records[0]
-	total := decimal.Zero
-	for _, s := range []string{
-		rec.Balances.Authorized,
-		rec.Balances.AuthorizedToMaintainLiabilities,
-		rec.Balances.Unauthorized,
-		rec.ClaimableBalancesAmount,
-		rec.LiquidityPoolsAmount,
-		rec.ContractsAmount,
-	} {
+	parse := func(label, s string) (decimal.Decimal, error) {
 		if s == "" {
-			continue
+			return decimal.Zero, nil
 		}
 		v, err := decimal.NewFromString(s)
 		if err != nil {
-			return decimal.Zero, fmt.Errorf("parsing amount for %s: %w", asset.Code, err)
+			return decimal.Zero, fmt.Errorf("parsing %s for %s: %w", label, asset.Code, err)
 		}
-		total = total.Add(v)
+		return v, nil
 	}
-	return total, nil
+
+	authorized, err := parse("authorized balance", rec.Balances.Authorized)
+	if err != nil {
+		return AssetStats{}, err
+	}
+	authMaintain, err := parse("authorized-to-maintain balance", rec.Balances.AuthorizedToMaintainLiabilities)
+	if err != nil {
+		return AssetStats{}, err
+	}
+	unauth, err := parse("unauthorized balance", rec.Balances.Unauthorized)
+	if err != nil {
+		return AssetStats{}, err
+	}
+	claimable, err := parse("claimable", rec.ClaimableBalancesAmount)
+	if err != nil {
+		return AssetStats{}, err
+	}
+	pools, err := parse("liquidity pools", rec.LiquidityPoolsAmount)
+	if err != nil {
+		return AssetStats{}, err
+	}
+	contracts, err := parse("contracts", rec.ContractsAmount)
+	if err != nil {
+		return AssetStats{}, err
+	}
+
+	return AssetStats{
+		HoldersAuthorized: rec.Accounts.Authorized,
+		TotalSupply:       authorized.Add(authMaintain).Add(unauth).Add(claimable).Add(pools).Add(contracts),
+		LiquidityPools:    pools,
+		ClaimableBalances: claimable,
+		Contracts:         contracts,
+	}, nil
 }
