@@ -118,6 +118,24 @@ func TestClientRetryOn5xx(t *testing.T) {
 	}
 }
 
+func TestClientRetryOn5xxExhausted(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	const max = 2
+	client := NewClient(server.URL, max, 5*time.Millisecond)
+	if _, err := client.get(context.Background(), "/test"); err == nil {
+		t.Fatal("expected error after exhausted 5xx retries")
+	}
+	if got := attempts.Load(); got != max+1 {
+		t.Errorf("attempts = %d, want %d (initial + %d retries)", got, max+1, max)
+	}
+}
+
 func TestClientNoRetryOn4xx(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -353,3 +353,46 @@ func TestMedianEmpty(t *testing.T) {
 		t.Errorf("median(nil) = %s, want 0", got)
 	}
 }
+
+// I11 sticky-on-zero: when every account legitimately returns zero (no recent
+// dividends) but yesterday had a non-zero figure, we keep yesterday's value.
+// Distinct from the Horizon-error case covered by TestEnrichMetricsStickyFallback.
+func TestComputeI11StickyWhenLiveSumIsZero(t *testing.T) {
+	h := &stubHorizon{
+		// All accounts return zero with no error.
+		dividends: map[string]decimal.Decimal{},
+	}
+	repo := &stubIndicatorRepo{
+		byTarget: map[string]map[int]indicator.Indicator{
+			"latest": indicatorMap(map[int]string{11: "2440.7"}),
+		},
+	}
+	svc := NewService(h, &stubPrice{}, repo, []string{"GFUND1", "GFUND2", "GFUND3"})
+
+	got := svc.computeI11(context.Background(), repo.byTarget["latest"])
+	if got == nil || *got != "2440.7" {
+		t.Errorf("computeI11 = %v, want sticky to 2440.7 (live zero, prior non-zero)", got)
+	}
+	if h.dividendsCalled != 3 {
+		t.Errorf("dividendsCalled = %d, want 3 (one walk per fund account)", h.dividendsCalled)
+	}
+}
+
+// I11 should write a real zero — not nil — when both live and prior are zero
+// (or prior is missing entirely). The downstream calculator needs a definite
+// value, not a sticky from nothing.
+func TestComputeI11WritesZeroWhenPriorIsAlsoZero(t *testing.T) {
+	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubIndicatorRepo{}, []string{"GFUND1"})
+	got := svc.computeI11(context.Background(), indicatorMap(map[int]string{11: "0"}))
+	if got == nil || *got != "0" {
+		t.Errorf("computeI11 = %v, want \"0\" (live zero, prior zero)", got)
+	}
+}
+
+func TestComputeI11WritesZeroWhenNoPrior(t *testing.T) {
+	svc := NewService(&stubHorizon{}, &stubPrice{}, nil, []string{"GFUND1"})
+	got := svc.computeI11(context.Background(), nil)
+	if got == nil || *got != "0" {
+		t.Errorf("computeI11 = %v, want \"0\" (no prior available)", got)
+	}
+}

@@ -14,10 +14,12 @@ import (
 	"github.com/mtlprog/stat/internal/snapshot"
 )
 
-// DividendCalculator computes dividend-related indicators (I11, I15, I16, I17, I33, I34, I54, I55)
-// purely from snapshot data. I11 (Monthly Dividends) lives in data.LiveMetrics — populated
-// upstream by metrics.EnrichMetrics, including a sticky-fallback that keeps the prior day's
-// value when the live fetch fails.
+// DividendCalculator computes dividend-related indicators (I11, I15, I16, I17, I33, I34, I54, I55).
+// Live values (I11) come from data.LiveMetrics — populated upstream by
+// metrics.EnrichMetrics with sticky-fallback to the prior day on Horizon
+// failures. The calculator itself makes no Horizon calls, but it does read
+// historical snapshots through the supplied HistoricalData (for I16/I17/I33/I55
+// dividend-chain math). Pure of network IO at this layer.
 type DividendCalculator struct{}
 
 func (c *DividendCalculator) IDs() []int          { return []int{11, 15, 16, 17, 33, 34, 54, 55} }

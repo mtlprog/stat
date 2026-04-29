@@ -26,10 +26,11 @@ func (c *Layer1Calculator) Calculate(_ context.Context, data domain.FundStructur
 	// I4: Operating Balance = sum of (EURMTL balances + XLM balances converted to EURMTL) across subfond accounts
 	i4 := calculateOperatingBalance(data)
 
-	// Live metrics come from the snapshot's LiveMetrics block. When a field is
-	// absent (legacy snapshots, or upstream fetch failed without a fallback)
-	// the indicator silently resolves to zero — which is the documented
-	// behaviour for backfilled history.
+	// Live values come from the snapshot's LiveMetrics block, which is filled
+	// upstream by metrics.EnrichMetrics with sticky-fallback to yesterday's
+	// persisted value on Horizon failures. A nil field here means the snapshot
+	// pre-dates the LiveMetrics rollout — the indicator resolves to zero, which
+	// is the documented behaviour for backfilled history (see CLAUDE.md).
 	i6 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLCirculation })
 	i7 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLRECTCirculation })
 	i10 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLMarketPrice })

@@ -8,8 +8,11 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
-// TokenomicsCalculator computes tokenomics indicators (I18, I21-I27, I40) purely
-// from snapshot data. Live values come from data.LiveMetrics — no Horizon calls.
+// TokenomicsCalculator computes tokenomics indicators (I18, I21-I27, I40)
+// from snapshot LiveMetrics + Layer1 deps. No Horizon calls — every live
+// value (I23-I27, I40) is read from data.LiveMetrics, which metrics.EnrichMetrics
+// populates upstream with sticky-fallback to the prior day on fetch failures.
+// I18 is currently a placeholder (zero) pending dividend-recipient capture.
 type TokenomicsCalculator struct{}
 
 func (c *TokenomicsCalculator) IDs() []int          { return []int{18, 21, 22, 23, 24, 25, 26, 27, 40} }

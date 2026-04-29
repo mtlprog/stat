@@ -157,6 +157,89 @@ func TestTokenomicsCalculatorFromLiveMetrics(t *testing.T) {
 	}
 }
 
+func TestLayer1CalculatorFromLiveMetrics(t *testing.T) {
+	calc := &Layer1Calculator{}
+
+	mtlCirc := "105663.22"
+	mtlrectCirc := "541972.30"
+	mtlPrice := "8.5"
+	mtlrectPrice := "0.4"
+	data := domain.FundStructureData{
+		LiveMetrics: &domain.FundLiveMetrics{
+			MTLCirculation:     &mtlCirc,
+			MTLRECTCirculation: &mtlrectCirc,
+			MTLMarketPrice:     &mtlPrice,
+			MTLRECTMarketPrice: &mtlrectPrice,
+		},
+	}
+	deps := map[int]Indicator{
+		51: {ID: 51, Value: decimal.NewFromInt(1_000_000)},
+		52: {ID: 52, Value: decimal.NewFromInt(500_000)},
+		53: {ID: 53, Value: decimal.NewFromInt(250_000)},
+		58: {ID: 58, Value: decimal.NewFromInt(80_000)},
+		59: {ID: 59, Value: decimal.NewFromInt(200)},
+		60: {ID: 60, Value: decimal.NewFromInt(9_000)},
+	}
+
+	out, err := calc.Calculate(context.Background(), data, deps, nil)
+	if err != nil {
+		t.Fatalf("Calculate failed: %v", err)
+	}
+	got := make(map[int]Indicator)
+	for _, ind := range out {
+		got[ind.ID] = ind
+	}
+
+	expectations := []struct {
+		id   int
+		want decimal.Decimal
+		desc string
+	}{
+		{3, decimal.NewFromInt(1_839_200), "I3 sums I51+I52+I53+I58+I59+I60"},
+		{6, decimal.RequireFromString("105663.22"), "I6 from LiveMetrics"},
+		{7, decimal.RequireFromString("541972.30"), "I7 from LiveMetrics"},
+		{5, decimal.RequireFromString("647635.52"), "I5 = I6 + I7"},
+		{10, decimal.RequireFromString("8.5"), "I10 from LiveMetrics"},
+		{49, decimal.RequireFromString("0.4"), "I49 from LiveMetrics"},
+	}
+	for _, e := range expectations {
+		if !got[e.id].Value.Equal(e.want) {
+			t.Errorf("I%d (%s) = %s, want %s", e.id, e.desc, got[e.id].Value, e.want)
+		}
+	}
+}
+
+func TestLayer1CalculatorMissingLiveMetrics(t *testing.T) {
+	calc := &Layer1Calculator{}
+	deps := map[int]Indicator{
+		51: {ID: 51, Value: decimal.NewFromInt(100)},
+		52: {ID: 52, Value: decimal.NewFromInt(200)},
+		53: {ID: 53, Value: decimal.NewFromInt(300)},
+		58: {ID: 58, Value: decimal.NewFromInt(400)},
+		59: {ID: 59, Value: decimal.NewFromInt(500)},
+		60: {ID: 60, Value: decimal.NewFromInt(600)},
+	}
+
+	out, err := calc.Calculate(context.Background(), domain.FundStructureData{}, deps, nil)
+	if err != nil {
+		t.Fatalf("Calculate failed: %v", err)
+	}
+	got := make(map[int]Indicator)
+	for _, ind := range out {
+		got[ind.ID] = ind
+	}
+	// I3 still sums regardless of LiveMetrics.
+	if !got[3].Value.Equal(decimal.NewFromInt(2100)) {
+		t.Errorf("I3 = %s, want 2100", got[3].Value)
+	}
+	// Live indicators resolve to zero — documented backfill behaviour.
+	for _, id := range []int{6, 7, 10, 49} {
+		if !got[id].Value.IsZero() {
+			t.Errorf("I%d = %s, want 0 (no LiveMetrics)", id, got[id].Value)
+		}
+	}
+}
+
 func TestTokenomicsCalculatorMissingLiveMetrics(t *testing.T) {
 	calc := &TokenomicsCalculator{}
 
