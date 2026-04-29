@@ -66,18 +66,24 @@ func NewService(portfolio PortfolioService, priceSvc PriceService, val Valuation
 
 // GetFundStructure runs the full fund aggregation pipeline.
 func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureData, error) {
+	t0 := time.Now()
+	slog.Debug("fund.GetFundStructure: fetching valuations")
 	allValuations, err := s.valuation.FetchAllValuations(ctx)
 	if err != nil {
 		return domain.FundStructureData{}, fmt.Errorf("fetching valuations: %w", err)
 	}
+	slog.Debug("fund.valuations done", "count", len(allValuations), "duration_ms", time.Since(t0).Milliseconds())
 
 	var allPortfolios []domain.FundAccountPortfolio
 	var warnings []string
 	for _, acc := range domain.AccountRegistry() {
+		ta := time.Now()
+		slog.Debug("fund.processAccount: start", "account", acc.Name)
 		portfolio, accWarnings, err := s.processAccount(ctx, acc, allValuations)
 		if err != nil {
 			return domain.FundStructureData{}, fmt.Errorf("processing account %s: %w", acc.Name, err)
 		}
+		slog.Debug("fund.processAccount: done", "account", acc.Name, "tokens", len(portfolio.Tokens), "duration_ms", time.Since(ta).Milliseconds())
 		allPortfolios = append(allPortfolios, portfolio)
 		warnings = append(warnings, accWarnings...)
 
@@ -101,17 +107,21 @@ func (s *Service) GetFundStructure(ctx context.Context) (domain.FundStructureDat
 }
 
 func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, allValuations []domain.AssetValuation) (domain.FundAccountPortfolio, []string, error) {
+	tFetch := time.Now()
 	rawPortfolio, err := s.portfolio.FetchPortfolio(ctx, acc.Address)
 	if err != nil {
 		return domain.FundAccountPortfolio{}, nil, err
 	}
+	slog.Debug("fund.fetchPortfolio done", "account", acc.Name, "tokens", len(rawPortfolio.Tokens), "duration_ms", time.Since(tFetch).Milliseconds())
 
 	accountValuations := mergeValuations(acc.Address, allValuations)
 
 	var tokens []domain.TokenPriceWithBalance
 	var warnings []string
 	for _, tb := range rawPortfolio.Tokens {
+		tTok := time.Now()
 		token, err := s.priceToken(ctx, tb, acc.Address, accountValuations)
+		slog.Debug("fund.priceToken done", "account", acc.Name, "asset", tb.Asset.Code, "duration_ms", time.Since(tTok).Milliseconds(), "err", err)
 		if err != nil {
 			w := fmt.Sprintf("failed to price %s on %s: %v", tb.Asset.Code, acc.Name, err)
 			slog.Debug("failed to price token", "asset", tb.Asset.Code, "account", acc.Name, "error", err)

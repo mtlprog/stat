@@ -47,6 +47,8 @@ import (
 )
 
 func main() {
+	configureLogger()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -139,6 +141,22 @@ func runQuote(c *cli.Context) error {
 
 	slog.Info("quotes fetched successfully")
 	return nil
+}
+
+// configureLogger installs a slog handler whose level honours LOG_LEVEL
+// (debug|info|warn|error). Default is INFO. Anything unknown also defaults
+// to INFO so a typo doesn't silently raise the level.
+func configureLogger() {
+	level := slog.LevelInfo
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 // reportTimeout caps the daily report run. Anything longer is a regression we
