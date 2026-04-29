@@ -114,7 +114,7 @@ func (s *Service) processAccount(ctx context.Context, acc domain.FundAccount, al
 		token, err := s.priceToken(ctx, tb, acc.Address, accountValuations)
 		if err != nil {
 			w := fmt.Sprintf("failed to price %s on %s: %v", tb.Asset.Code, acc.Name, err)
-			slog.Warn("failed to price token", "asset", tb.Asset.Code, "account", acc.Name, "error", err)
+			slog.Debug("failed to price token", "asset", tb.Asset.Code, "account", acc.Name, "error", err)
 			warnings = append(warnings, w)
 			tokens = append(tokens, domain.TokenPriceWithBalance{
 				Asset:   tb.Asset,
@@ -178,10 +178,10 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 		resolved, err := s.external.ResolveValuation(ctx, *val)
 		if err != nil {
 			if priceErr != nil {
-				slog.Warn("manual valuation resolution failed and no market price available",
+				slog.Error("manual valuation resolution failed and no market price available",
 					"token", tb.Asset.Code, "error", err, "marketPriceError", priceErr)
 			} else {
-				slog.Warn("manual valuation resolution failed, falling back to market price",
+				slog.Debug("manual valuation resolution failed, falling back to market price",
 					"token", tb.Asset.Code, "error", err)
 			}
 		} else {
@@ -198,7 +198,7 @@ func (s *Service) priceToken(ctx context.Context, tb domain.TokenBalance, accoun
 			// priceInXLM = valuationInEURMTL / xlmRate.Price
 			xlmRate, xlmErr := s.price.GetPrice(ctx, domain.XLMAsset(), domain.EURMTLAsset(), "1")
 			if xlmErr != nil {
-				slog.Warn("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)
+				slog.Debug("failed to derive XLM price for valuation override", "token", tb.Asset.Code, "error", xlmErr)
 			} else {
 				xlmPrice := domain.DivideWithPrecision(resolved.ValueInEURMTL, xlmRate.Price)
 				result.PriceInXLM = &xlmPrice

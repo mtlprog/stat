@@ -44,7 +44,7 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				slog.Warn("failed to scan valuations for account", "account", accountID, "error", err)
+				slog.Error("failed to scan valuations for account", "account", accountID, "error", err)
 				errs = append(errs, fmt.Errorf("account %s: %w", accountID, err))
 				return
 			}
@@ -55,7 +55,7 @@ func (s *Service) FetchAllValuations(ctx context.Context) ([]domain.AssetValuati
 	wg.Wait()
 
 	if len(errs) > 0 {
-		slog.Warn("some valuation scans failed", "errorCount", len(errs), "successCount", len(allValuations))
+		slog.Error("some valuation scans failed", "errorCount", len(errs), "successCount", len(allValuations))
 		if len(allValuations) == 0 {
 			return nil, fmt.Errorf("all %d valuation scans failed", len(errs))
 		}

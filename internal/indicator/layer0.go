@@ -42,7 +42,7 @@ func (c *Layer0Calculator) Calculate(_ context.Context, data domain.FundStructur
 	// Emit zero-value indicators for any accounts not found in data
 	for name, id := range accountIndicators {
 		if !found[id] {
-			slog.Warn("account not found in fund data, emitting zero indicator",
+			slog.Debug("account not found in fund data, emitting zero indicator",
 				"account", name, "indicatorID", id)
 			indicators = append(indicators, NewIndicator(id, decimal.Zero, "", ""))
 		}

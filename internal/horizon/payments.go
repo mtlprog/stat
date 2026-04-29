@@ -107,7 +107,7 @@ func (c *Client) FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string
 
 		u, err := url.Parse(resp.Links.Next.Href)
 		if err != nil {
-			slog.Warn("failed to parse Horizon pagination link, results may be incomplete",
+			slog.Error("failed to parse Horizon pagination link, results may be incomplete",
 				"href", resp.Links.Next.Href, "error", err)
 			break
 		}
@@ -138,7 +138,7 @@ func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) 
 		for _, op := range resp.Embedded.Records {
 			t, err := time.Parse(time.RFC3339, op.CreatedAt)
 			if err != nil {
-				slog.Warn("skipping payment with unparseable timestamp",
+				slog.Debug("skipping payment with unparseable timestamp",
 					"created_at", op.CreatedAt, "type", op.Type, "error", err)
 				continue
 			}
@@ -156,7 +156,7 @@ func (c *Client) FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) 
 
 			amt, err := decimal.NewFromString(op.Amount)
 			if err != nil {
-				slog.Warn("skipping payment with unparseable amount",
+				slog.Debug("skipping payment with unparseable amount",
 					"amount", op.Amount, "asset", op.AssetCode,
 					"created_at", op.CreatedAt, "error", err)
 				continue

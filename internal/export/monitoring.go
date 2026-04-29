@@ -97,7 +97,7 @@ func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any,
 			if ind, ok := byID[col.indicatorID]; ok {
 				data[i+1] = toFloat(ind.Value)
 			} else {
-				slog.Warn("monitoring: indicator missing, writing empty cell",
+				slog.Debug("monitoring: indicator missing, writing empty cell",
 					"indicatorID", col.indicatorID,
 					"column", col.header,
 				)
@@ -223,7 +223,7 @@ func (w *SheetsWriter) appendMonitoringRow(ctx context.Context, rows []Indicator
 	}
 	for _, row := range dates.Values {
 		if len(row) > 0 && fmt.Sprint(row[0]) == todayStr {
-			slog.Warn("monitoring: row for today already exists, skipping append", "date", todayStr)
+			slog.Info("monitoring: row for today already exists, skipping append", "date", todayStr)
 			return nil
 		}
 	}
