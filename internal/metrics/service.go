@@ -196,8 +196,15 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	return nil
 }
 
-// priorMetrics loads the latest indicator set strictly before `date` for use as
-// sticky-fallback. Returns nil if the repository is unset or has no prior data.
+// priorMetrics loads yesterday-or-earlier indicators for sticky-fallback.
+//
+// We anchor at `date - 1 day` rather than `date` so that re-running the report
+// for today (idempotent) doesn't shadow the fallback with the just-written —
+// possibly broken — values it was meant to recover from. GetNearestBefore is
+// inclusive on the upper bound, so an anchor of `date-1` returns the most
+// recent indicator set whose snapshot_date ≤ yesterday.
+//
+// Returns nil if no repository is configured or no prior data exists.
 func (s *Service) priorMetrics(ctx context.Context, date time.Time) map[int]indicator.Indicator {
 	if s.indicator == nil {
 		return nil
@@ -278,8 +285,14 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 // is zero but the prior day had a non-zero I11, we keep yesterday's value —
 // the user-visible cell is meant to be "last known monthly dividend" and must
 // not flicker to zero between monthly disbursements.
+//
+// Trade-off: the rolling 30-day window means I11 can legitimately drop to zero
+// the day a payment falls off the window. Sticky-on-zero will mask that until
+// a new dividend is posted. Per-product requirement: never show a misleading
+// zero in MONITORING; reflect the last known value instead.
 func (s *Service) computeI11(ctx context.Context, prev map[int]indicator.Indicator) *string {
 	total := decimal.Zero
+	successCount := 0
 	for _, addr := range s.fundAddrs {
 		stepCtx, cancel := withStepTimeout(ctx)
 		amt, err := s.horizon.FetchMonthlyEURMTLOutflow(stepCtx, addr, s.fundAddrs)
@@ -289,12 +302,21 @@ func (s *Service) computeI11(ctx context.Context, prev map[int]indicator.Indicat
 				"account", addr, "error", err)
 			continue
 		}
+		successCount++
 		total = total.Add(amt)
+	}
+
+	// Distinguish "all walks failed" from "everyone really paid 0": the cascade
+	// is what an operator should see, not 11 individual ERROR lines plus a
+	// quiet sticky reuse.
+	if successCount == 0 && len(s.fundAddrs) > 0 {
+		slog.Error("metrics: all dividend account walks failed, I11 will fall back to prior",
+			"accounts", len(s.fundAddrs))
 	}
 
 	if total.IsZero() {
 		if priorStr := pickPrior(prev, 11); priorStr != nil && !domain.SafeParse(*priorStr).IsZero() {
-			slog.Error("metrics: I11 sum is zero but prior was non-zero, reusing prior",
+			slog.Info("metrics: I11 live sum is zero, reusing prior (intentional sticky-on-zero)",
 				"prior", *priorStr)
 			return priorStr
 		}
@@ -319,12 +341,19 @@ func (s *Service) fetchDailyVolume(ctx context.Context, date time.Time) (decimal
 
 // computeI26 produces the rolling 30-day EURMTL volume by subtracting the
 // daily volume from 30 days ago and adding today's. Falls back to yesterday's
-// I26 if any input is missing — never produces a 0 from a fetch gap.
+// persisted I26 when today's daily fetch failed or the 30-day-ago snapshot is
+// missing.
+//
+// Cold-start caveat: if both today's daily fetch failed AND no prior I26
+// exists in the DB, the function returns nil and the calculator resolves I26
+// to zero. This path is not expected in production (the prod DB is fully
+// seeded) and intentionally fails loud rather than fabricate a value.
 func (s *Service) computeI26(ctx context.Context, date time.Time, dailyVol decimal.Decimal, dailyOK bool, prev map[int]indicator.Indicator) *string {
 	yesterday30d := pickPrior(prev, 26)
 	if !dailyOK || yesterday30d == nil {
 		if yesterday30d == nil {
-			slog.Error("metrics: no prior I26 in DB, skipping incremental — calculator will see 0")
+			slog.Error("metrics: no prior I26 in DB, skipping incremental — calculator will see 0",
+				"dailyOK", dailyOK)
 		}
 		return yesterday30d
 	}
