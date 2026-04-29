@@ -2,17 +2,14 @@ package export
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 
-	"github.com/mtlprog/stat/internal/domain"
 	"github.com/mtlprog/stat/internal/indicator"
-	"github.com/mtlprog/stat/internal/snapshot"
 )
 
 // mainIndicatorIDs is the set of indicator IDs that appear in the IND_MAIN sheet.
@@ -38,57 +35,38 @@ type SheetWriter interface {
 	Write(ctx context.Context, rows []IndicatorRow) error
 }
 
-// Service orchestrates indicator calculation and delegates writing to a SheetWriter.
+// IndicatorHistory exposes the slice of repository methods the export service
+// needs for historical comparisons. It is a narrowed view of indicator.Repository
+// to keep the export package decoupled from the persistence layer.
+type IndicatorHistory interface {
+	GetNearestBefore(ctx context.Context, slug string, date time.Time) (map[int]indicator.Indicator, error)
+}
+
+// Service writes computed indicators to a spreadsheet destination, joining each
+// row with historical period-over-period change data read directly from the
+// fund_indicators table — never recomputed from snapshots.
 type Service struct {
-	indicators *indicator.Service
-	snapshots  snapshot.Repository
-	writer     SheetWriter
+	history IndicatorHistory
+	writer  SheetWriter
+	slug    string
 }
 
 // NewService creates a new export Service.
-func NewService(indicators *indicator.Service, snapshots snapshot.Repository, writer SheetWriter) *Service {
-	return &Service{
-		indicators: indicators,
-		snapshots:  snapshots,
-		writer:     writer,
-	}
+func NewService(history IndicatorHistory, writer SheetWriter) *Service {
+	return &Service{history: history, writer: writer, slug: "mtlf"}
 }
 
-// Export calculates all indicators with historical changes, writes to IND_ALL/IND_MAIN,
-// and returns the computed rows for callers that need them (e.g. MONITORING append).
-func (s *Service) Export(ctx context.Context, data domain.FundStructureData) ([]IndicatorRow, error) {
-	return s.ExportWithHistory(ctx, data, nil)
+// Export writes IND_ALL/IND_MAIN with historical comparisons read from the
+// indicator repository.
+func (s *Service) Export(ctx context.Context, current []indicator.Indicator) ([]IndicatorRow, error) {
+	return s.exportRows(ctx, current, nil)
 }
 
-// fetchHistorical retrieves historical indicator sets for each period (days ago).
-func (s *Service) fetchHistorical(ctx context.Context, periods []int) map[int]map[int]indicator.Indicator {
-	result := make(map[int]map[int]indicator.Indicator, len(periods))
-	now := time.Now().UTC()
-
-	for _, days := range periods {
-		pastDate := now.AddDate(0, 0, -days)
-		snap, err := s.snapshots.GetNearestBefore(ctx, "mtlf", pastDate)
-		if err != nil {
-			slog.Warn("export: historical snapshot unavailable", "days", days, "error", err)
-			continue
-		}
-
-		var histData domain.FundStructureData
-		if err := json.Unmarshal(snap.Data, &histData); err != nil {
-			slog.Warn("export: failed to unmarshal historical snapshot", "days", days, "error", err)
-			continue
-		}
-
-		histInds, err := s.indicators.CalculateAll(ctx, histData)
-		if err != nil {
-			slog.Warn("export: failed to calculate historical indicators", "days", days, "error", err)
-			continue
-		}
-
-		result[days] = lo.KeyBy(histInds, func(ind indicator.Indicator) int { return ind.ID })
-	}
-
-	return result
+// ExportWithHistory works like Export but fills gaps in historical data from monHist
+// when DB indicators are unavailable. Use this for import-excel where the DB has few
+// indicator rows but the Excel MONITORING sheet has full history.
+func (s *Service) ExportWithHistory(ctx context.Context, current []indicator.Indicator, monHist MonitoringHistory) ([]IndicatorRow, error) {
+	return s.exportRows(ctx, current, monHist)
 }
 
 // MonitoringHistory maps dates to indicator values extracted from MONITORING sheet rows.
@@ -117,21 +95,30 @@ func (mh MonitoringHistory) NearestBefore(target time.Time) map[int]indicator.In
 	return result
 }
 
-// ExportWithHistory works like Export but fills gaps in historical data from monHist
-// when DB snapshots are unavailable. Use this for import-excel where the DB has few
-// snapshots but the Excel MONITORING sheet has full history.
-func (s *Service) ExportWithHistory(ctx context.Context, data domain.FundStructureData, monHist MonitoringHistory) ([]IndicatorRow, error) {
-	current, err := s.indicators.CalculateAll(ctx, data)
-	if err != nil {
-		return nil, fmt.Errorf("calculating current indicators: %w", err)
-	}
-	return s.exportRows(ctx, current, monHist)
-}
+// fetchHistorical retrieves persisted indicator sets at-or-before each
+// (today − days) target. Reads from fund_indicators only; no recomputation,
+// no Horizon traffic.
+func (s *Service) fetchHistorical(ctx context.Context, periods []int) map[int]map[int]indicator.Indicator {
+	result := make(map[int]map[int]indicator.Indicator, len(periods))
+	now := time.Now().UTC()
 
-// ExportPrecomputed writes IND_ALL/IND_MAIN using indicators already computed by the caller.
-// Used by `stat report` to avoid running CalculateAll twice (once for DB persistence, once here).
-func (s *Service) ExportPrecomputed(ctx context.Context, current []indicator.Indicator) ([]IndicatorRow, error) {
-	return s.exportRows(ctx, current, nil)
+	for _, days := range periods {
+		pastDate := now.AddDate(0, 0, -days)
+		hist, err := s.history.GetNearestBefore(ctx, s.slug, pastDate)
+		if err != nil {
+			if errors.Is(err, indicator.ErrNotFound) {
+				continue
+			}
+			slog.Error("export: load historical indicators failed", "days", days, "error", err)
+			continue
+		}
+		if len(hist) == 0 {
+			continue
+		}
+		result[days] = hist
+	}
+
+	return result
 }
 
 func (s *Service) exportRows(ctx context.Context, current []indicator.Indicator, monHist MonitoringHistory) ([]IndicatorRow, error) {
@@ -146,7 +133,6 @@ func (s *Service) exportRows(ctx context.Context, current []indicator.Indicator,
 		pastDate := now.AddDate(0, 0, -days)
 		if fallback := monHist.NearestBefore(pastDate); fallback != nil {
 			historicalByPeriod[days] = fallback
-			slog.Info("export: using monitoring history for period", "days", days)
 		}
 	}
 
@@ -166,7 +152,7 @@ func (s *Service) exportRows(ctx context.Context, current []indicator.Indicator,
 	}
 
 	if err := s.writer.Write(ctx, rows); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("writing indicator rows: %w", err)
 	}
 	return rows, nil
 }
