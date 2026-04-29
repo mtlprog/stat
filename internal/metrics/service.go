@@ -18,6 +18,11 @@ import (
 // indicator history.
 const fundSlug = "mtlf"
 
+// stepTimeout caps each Horizon-bound enrichment step. If a step doesn't
+// finish within this budget, we abandon it and fall back to the prior day's
+// persisted value — so one slow endpoint can't poison the whole report.
+const stepTimeout = 90 * time.Second
+
 // Horizon provides the Horizon API calls required to capture live metrics.
 type Horizon interface {
 	FetchAssetStats(ctx context.Context, asset domain.AssetInfo) (horizon.AssetStats, error)
@@ -66,31 +71,57 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	mtlapAsset := domain.MTLAPAsset()
 	eurmtlAsset := domain.EURMTLAsset()
 
-	// /assets stats — one HTTP call per asset gives circulation and holder count.
+	stage := func(name string) func() {
+		t := time.Now()
+		slog.Debug("metrics step start", "step", name)
+		return func() {
+			slog.Debug("metrics step done", "step", name, "duration_ms", time.Since(t).Milliseconds())
+		}
+	}
+
+	done := stage("MTL_circulation")
 	if circ, ok := s.fetchCirculation(ctx, mtlAsset); ok {
 		m.MTLCirculation = ptr(circ.String())
 	} else {
 		m.MTLCirculation = pickPrior(prev, 6)
 	}
+	done()
+
+	done = stage("MTLRECT_circulation")
 	if circ, ok := s.fetchCirculation(ctx, mtlrectAsset); ok {
 		m.MTLRECTCirculation = ptr(circ.String())
 	} else {
 		m.MTLRECTCirculation = pickPrior(prev, 7)
 	}
-	if stats, err := s.horizon.FetchAssetStats(ctx, eurmtlAsset); err != nil {
-		slog.Error("metrics: fetch EURMTL stats failed, reusing prior I24", "error", err)
-		m.EURMTLParticipants = pickPrior(prev, 24)
-	} else {
-		m.EURMTLParticipants = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
-	}
-	if stats, err := s.horizon.FetchAssetStats(ctx, mtlapAsset); err != nil {
-		slog.Error("metrics: fetch MTLAP stats failed, reusing prior I40", "error", err)
-		m.MTLAPHolders = pickPrior(prev, 40)
-	} else {
-		m.MTLAPHolders = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
-	}
+	done()
 
-	// I27 (count) and I23 (median) come from the same paginated holder walk.
+	done = stage("EURMTL_holders")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		if stats, err := s.horizon.FetchAssetStats(stepCtx, eurmtlAsset); err != nil {
+			slog.Error("metrics: fetch EURMTL stats failed, reusing prior I24", "error", err)
+			m.EURMTLParticipants = pickPrior(prev, 24)
+		} else {
+			m.EURMTLParticipants = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
+		}
+		cancel()
+	}
+	done()
+
+	done = stage("MTLAP_holders")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		if stats, err := s.horizon.FetchAssetStats(stepCtx, mtlapAsset); err != nil {
+			slog.Error("metrics: fetch MTLAP stats failed, reusing prior I40", "error", err)
+			m.MTLAPHolders = pickPrior(prev, 40)
+		} else {
+			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
+		}
+		cancel()
+	}
+	done()
+
+	done = stage("MTL_MTLRECT_shareholders_walk")
 	if count, median, ok := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset); ok {
 		m.MTLShareholders = ptr(decimal.NewFromInt(int64(count)).String())
 		m.MTLShareholdersMedian = ptr(median.String())
@@ -98,40 +129,59 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 		m.MTLShareholders = pickPrior(prev, 27)
 		m.MTLShareholdersMedian = pickPrior(prev, 23)
 	}
+	done()
 
-	// I11: monthly dividends from issuer only.
-	if div, err := s.horizon.FetchMonthlyEURMTLOutflow(ctx, domain.IssuerAddress, s.fundAddrs); err != nil {
-		slog.Error("metrics: fetch monthly dividends failed, reusing prior I11", "error", err)
-		m.MonthlyDividends = pickPrior(prev, 11)
-	} else {
-		m.MonthlyDividends = ptr(div.String())
+	done = stage("issuer_dividends_walk")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		if div, err := s.horizon.FetchMonthlyEURMTLOutflow(stepCtx, domain.IssuerAddress, s.fundAddrs); err != nil {
+			slog.Error("metrics: fetch monthly dividends failed, reusing prior I11", "error", err)
+			m.MonthlyDividends = pickPrior(prev, 11)
+		} else {
+			m.MonthlyDividends = ptr(div.String())
+		}
+		cancel()
 	}
+	done()
 
-	// I25: EURMTL payment volume over the prior 24h.
+	done = stage("eurmtl_daily_volume")
 	dailyVol, dailyOK := s.fetchDailyVolume(ctx, date)
 	if dailyOK {
 		m.EURMTLDailyVolume = ptr(dailyVol.String())
 	} else {
 		m.EURMTLDailyVolume = pickPrior(prev, 25)
 	}
+	done()
 
-	// I26: incremental from yesterday's I26 + today's I25 − I25 from 30 days ago.
-	// Falls back to yesterday's I26 if any input is missing.
+	done = stage("i26_incremental")
 	m.EURMTL30dVolume = s.computeI26(ctx, date, dailyVol, dailyOK, prev)
+	done()
 
-	// Bid prices.
-	if bid, err := s.price.GetBidPrice(ctx, mtlAsset, eurmtlAsset); err != nil {
-		slog.Error("metrics: fetch MTL bid price failed, reusing prior I10", "error", err)
-		m.MTLMarketPrice = pickPrior(prev, 10)
-	} else {
-		m.MTLMarketPrice = ptr(bid.String())
+	done = stage("MTL_bid")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		if bid, err := s.price.GetBidPrice(stepCtx, mtlAsset, eurmtlAsset); err != nil {
+			slog.Error("metrics: fetch MTL bid price failed, reusing prior I10", "error", err)
+			m.MTLMarketPrice = pickPrior(prev, 10)
+		} else {
+			m.MTLMarketPrice = ptr(bid.String())
+		}
+		cancel()
 	}
-	if bid, err := s.price.GetBidPrice(ctx, mtlrectAsset, eurmtlAsset); err != nil {
-		slog.Error("metrics: fetch MTLRECT bid price failed, reusing prior I49", "error", err)
-		m.MTLRECTMarketPrice = pickPrior(prev, 49)
-	} else {
-		m.MTLRECTMarketPrice = ptr(bid.String())
+	done()
+
+	done = stage("MTLRECT_bid")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		if bid, err := s.price.GetBidPrice(stepCtx, mtlrectAsset, eurmtlAsset); err != nil {
+			slog.Error("metrics: fetch MTLRECT bid price failed, reusing prior I49", "error", err)
+			m.MTLRECTMarketPrice = pickPrior(prev, 49)
+		} else {
+			m.MTLRECTMarketPrice = ptr(bid.String())
+		}
+		cancel()
 	}
+	done()
 
 	data.LiveMetrics = m
 	return nil
@@ -151,10 +201,18 @@ func (s *Service) priorMetrics(ctx context.Context, date time.Time) map[int]indi
 	return prev
 }
 
+// withStepTimeout returns a child context bounded by stepTimeout, so a single
+// slow Horizon endpoint can't burn the report's overall budget.
+func withStepTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, stepTimeout)
+}
+
 // fetchCirculation derives circulating supply from a single /assets call:
 // total supply minus AMM-pool reserves. Returns ok=false on fetch failure.
 func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) (decimal.Decimal, bool) {
-	stats, err := s.horizon.FetchAssetStats(ctx, asset)
+	stepCtx, cancel := withStepTimeout(ctx)
+	defer cancel()
+	stats, err := s.horizon.FetchAssetStats(stepCtx, asset)
 	if err != nil {
 		slog.Error("metrics: fetch asset stats failed", "asset", asset.Code, "error", err)
 		return decimal.Zero, false
@@ -168,16 +226,23 @@ func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) 
 
 // fetchShareholderStats walks all MTL and MTLRECT holders with balance ≥1 and
 // returns the count of unique holders and the median per-holder total.
-// One paginated sweep per asset; both asset failures result in ok=false.
+// Each per-asset sweep gets its own step timeout so the slower side can't drag
+// the report past its overall budget; either failure aborts to ok=false and
+// the caller falls back to the prior day's persisted I27 / I23.
 func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAsset domain.AssetInfo) (int, decimal.Decimal, bool) {
 	minOne := decimal.NewFromInt(1)
 
-	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(ctx, mtlAsset, minOne)
+	mtlCtx, mtlCancel := withStepTimeout(ctx)
+	defer mtlCancel()
+	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlCtx, mtlAsset, minOne)
 	if err != nil {
 		slog.Error("metrics: fetch MTL holders failed", "error", err)
 		return 0, decimal.Zero, false
 	}
-	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(ctx, mtlrectAsset, minOne)
+
+	mtlrectCtx, mtlrectCancel := withStepTimeout(ctx)
+	defer mtlrectCancel()
+	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlrectCtx, mtlrectAsset, minOne)
 	if err != nil {
 		slog.Error("metrics: fetch MTLRECT holders failed", "error", err)
 		return 0, decimal.Zero, false
@@ -199,10 +264,13 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 }
 
 // fetchDailyVolume returns total EURMTL payment volume in the 24h window
-// preceding `date`.
+// preceding `date`. Wrapped in stepTimeout because the underlying /payments
+// endpoint can paginate through thousands of pages on busy days.
 func (s *Service) fetchDailyVolume(ctx context.Context, date time.Time) (decimal.Decimal, bool) {
+	stepCtx, cancel := withStepTimeout(ctx)
+	defer cancel()
 	since := date.AddDate(0, 0, -1)
-	vol, err := s.horizon.FetchEURMTLPaymentVolume(ctx, since)
+	vol, err := s.horizon.FetchEURMTLPaymentVolume(stepCtx, since)
 	if err != nil {
 		slog.Error("metrics: fetch EURMTL daily volume failed", "error", err)
 		return decimal.Zero, false
