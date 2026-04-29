@@ -452,3 +452,73 @@ func TestFetchAssetHolderBalancesByBalanceEmpty(t *testing.T) {
 		t.Errorf("got %d entries, want 0", len(balances))
 	}
 }
+
+// --- FetchAssetStats tests ---
+
+func TestFetchAssetStatsNativeRejected(t *testing.T) {
+	client := NewClient("http://unused", 1, 10*time.Millisecond)
+	_, err := client.FetchAssetStats(context.Background(), domain.XLMAsset())
+	if err == nil {
+		t.Fatal("expected error for native asset")
+	}
+}
+
+func TestFetchAssetStatsAggregates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"_embedded": {
+				"records": [{
+					"asset_type": "credit_alphanum4",
+					"asset_code": "MTL",
+					"asset_issuer": "GISSUER",
+					"accounts": {"authorized": 4321, "authorized_to_maintain_liabilities": 0, "unauthorized": 0},
+					"balances": {"authorized": "1000.0000000", "authorized_to_maintain_liabilities": "10.0000000", "unauthorized": "0.0000000"},
+					"claimable_balances_amount": "5.0000000",
+					"liquidity_pools_amount": "200.0000000",
+					"contracts_amount": "0.0000000"
+				}]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	asset := domain.AssetInfo{Code: "MTL", Issuer: "GISSUER"}
+
+	stats, err := client.FetchAssetStats(context.Background(), asset)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.HoldersAuthorized != 4321 {
+		t.Errorf("HoldersAuthorized = %d, want 4321", stats.HoldersAuthorized)
+	}
+	if !stats.TotalSupply.Equal(decimal.RequireFromString("1215")) {
+		t.Errorf("TotalSupply = %s, want 1215", stats.TotalSupply)
+	}
+	if !stats.LiquidityPools.Equal(decimal.RequireFromString("200")) {
+		t.Errorf("LiquidityPools = %s, want 200", stats.LiquidityPools)
+	}
+	if !stats.ClaimableBalances.Equal(decimal.RequireFromString("5")) {
+		t.Errorf("ClaimableBalances = %s, want 5", stats.ClaimableBalances)
+	}
+}
+
+func TestFetchAssetStatsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"_embedded": {"records": []}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	asset := domain.AssetInfo{Code: "UNKNOWN", Issuer: "GISSUER"}
+
+	stats, err := client.FetchAssetStats(context.Background(), asset)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.HoldersAuthorized != 0 || !stats.TotalSupply.IsZero() {
+		t.Errorf("expected zero stats for missing asset, got %+v", stats)
+	}
+}
