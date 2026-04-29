@@ -18,7 +18,7 @@ func TestFetchPricesAllSymbols(t *testing.T) {
 			"ethereum": {"eur": 2500.00},
 			"stellar": {"eur": 0.10},
 			"tether": {"eur": 0.92},
-			"gold": {"eur": 1800.00}
+			"pax-gold": {"eur": 1800.00}
 		}`))
 	}))
 	defer server.Close()

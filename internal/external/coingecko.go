@@ -22,7 +22,7 @@ var symbolMapping = map[string]string{
 	"XLM":  "stellar",
 	"Sats": "bitcoin",
 	"USD":  "tether",
-	"AU":   "gold",
+	"AU":   "pax-gold", // 1 PAXG = 1 troy oz of LBMA gold; CoinGecko's "gold" id is a memecoin
 }
 
 // SymbolMapping returns a copy of the symbol-to-CoinGecko-ID mapping.
