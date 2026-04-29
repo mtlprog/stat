@@ -92,13 +92,13 @@ func TestGetFundStructurePartitioning(t *testing.T) {
 	if len(result.Accounts) != 6 {
 		t.Errorf("Accounts = %d, want 6", len(result.Accounts))
 	}
-	// 1 mutual (APART only; MFB moved to other)
+	// 1 mutual (APART)
 	if len(result.MutualFunds) != 1 {
 		t.Errorf("MutualFunds = %d, want 1", len(result.MutualFunds))
 	}
-	// 4 other (LABR, MTLM, PROGRAMMERS GUILD, MFB)
-	if len(result.OtherAccounts) != 4 {
-		t.Errorf("OtherAccounts = %d, want 4", len(result.OtherAccounts))
+	// 3 other (LABR, MTLM, PROGRAMMERS GUILD)
+	if len(result.OtherAccounts) != 3 {
+		t.Errorf("OtherAccounts = %d, want 3", len(result.OtherAccounts))
 	}
 
 	// Aggregated totals only from main accounts

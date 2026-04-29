@@ -70,7 +70,7 @@ func (s *Service) EnrichMetrics(ctx context.Context, data *domain.FundStructureD
 	}
 
 	// I11: Monthly dividends — sum EURMTL outflows with "div" memo across all fund accounts.
-	// Dividends may be paid from MFB, APART, or other fund accounts, not just the issuer.
+	// Dividends may be paid from APART or other fund accounts, not just the issuer.
 	totalDivs := decimal.Zero
 	for _, addr := range s.fundAddrs {
 		d, err := s.horizon.FetchMonthlyEURMTLOutflow(ctx, addr, s.fundAddrs)

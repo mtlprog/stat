@@ -334,13 +334,13 @@ func runImport(c *cli.Context) error {
 	fullIndicatorSvc := indicator.NewService(priceSvc, horizonClient, hist)
 
 	// IDs that produce correct values from snapshot data alone, even when Horizon
-	// is nil. Layer0 (I51-I53, I56-I61) reads only account balances/prices stored
+	// is nil. Layer0 (I51-I53, I56, I58-I61) reads only account balances/prices stored
 	// in the snapshot. Layer1 I3 (Assets Value) and I4 (Operating Balance) depend
 	// on Layer0 outputs, not on Horizon. Other Layer1+ indicators (I5-I7, I10, etc.)
 	// require Horizon for circulation/dividend data and will be zero — excluded here.
 	snapshotOnlyIDs := map[int]bool{
 		3: true, 4: true,
-		51: true, 52: true, 53: true, 56: true, 57: true, 58: true, 59: true, 60: true, 61: true,
+		51: true, 52: true, 53: true, 56: true, 58: true, 59: true, 60: true, 61: true,
 	}
 
 	// Delete existing MONITORING sheet so the bulk import starts clean.

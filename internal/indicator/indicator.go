@@ -61,7 +61,6 @@ var indicatorRegistry = map[int]IndicatorMeta{
 	54: {Name: "Annual DPS", Unit: "EURMTL", Description: "Годовые дивиденды на акцию"},
 	55: {Name: "Price Year Ago", Unit: "EURMTL", Description: "Рыночная цена MTL акции год назад"},
 	56: {Name: "MFApart Total Value", Unit: "EURMTL", Description: "Стоимость активов ПИФ MFApart"},
-	57: {Name: "MFBond Total Value", Unit: "EURMTL", Description: "Стоимость активов ПИФ MFBond"},
 	58: {Name: "Issuer Free Assets", Unit: "EURMTL", Description: "Свободные активы эмитента"},
 	59: {Name: "BOSS Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда BOSS"},
 	60: {Name: "ADMIN Total Value", Unit: "EURMTL", Description: "Стоимость активов счёта ADMIN"},

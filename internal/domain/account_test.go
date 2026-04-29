@@ -5,8 +5,8 @@ import (
 )
 
 func TestAccountRegistryCount(t *testing.T) {
-	if got := len(AccountRegistry()); got != 11 {
-		t.Errorf("AccountRegistry() has %d accounts, want 11", got)
+	if got := len(AccountRegistry()); got != 10 {
+		t.Errorf("AccountRegistry() has %d accounts, want 10", got)
 	}
 }
 
@@ -38,8 +38,8 @@ func TestMutualAccounts(t *testing.T) {
 
 func TestOtherAccounts(t *testing.T) {
 	other := OtherAccounts()
-	if got := len(other); got != 4 {
-		t.Errorf("OtherAccounts() returned %d, want 4", got)
+	if got := len(other); got != 3 {
+		t.Errorf("OtherAccounts() returned %d, want 3", got)
 	}
 
 	for _, a := range other {
@@ -85,7 +85,7 @@ func TestAccountByAddressNotFound(t *testing.T) {
 func TestAccountRegistryContainsAllExpected(t *testing.T) {
 	expectedNames := []string{
 		"MAIN ISSUER", "MABIZ", "MCITY", "DEFI", "BOSS",
-		"MFB", "APART", "ADMIN",
+		"APART", "ADMIN",
 		"LABR", "MTLM", "PROGRAMMERS GUILD",
 	}
 
@@ -130,7 +130,7 @@ func TestAccountTypeCounts(t *testing.T) {
 		AccountTypeSubfond:     4,
 		AccountTypeMutual:      1,
 		AccountTypeOperational: 1,
-		AccountTypeOther:       4,
+		AccountTypeOther:       3,
 	}
 
 	for typ, want := range expected {

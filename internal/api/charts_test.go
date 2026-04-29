@@ -57,16 +57,25 @@ func TestGetBalanceBySubfundLatest(t *testing.T) {
 	if result.Date != "2024-01-15" {
 		t.Errorf("date = %q, want 2024-01-15", result.Date)
 	}
-	if len(result.Slices) != 4 {
-		t.Fatalf("expected 4 subfond slices, got %d", len(result.Slices))
+	if len(result.Slices) != 6 {
+		t.Fatalf("expected 6 slices (4 subfond + issuer + operational), got %d", len(result.Slices))
 	}
-	wantNames := map[string]bool{"MABIZ": true, "MCITY": true, "DEFI": true, "BOSS": true}
+	wantNames := map[string]string{
+		"MABIZ":       string(domain.AccountTypeSubfond),
+		"MCITY":       string(domain.AccountTypeSubfond),
+		"DEFI":        string(domain.AccountTypeSubfond),
+		"BOSS":        string(domain.AccountTypeSubfond),
+		"MAIN ISSUER": string(domain.AccountTypeIssuer),
+		"ADMIN":       string(domain.AccountTypeOperational),
+	}
 	for _, s := range result.Slices {
-		if !wantNames[s.Name] {
+		wantType, ok := wantNames[s.Name]
+		if !ok {
 			t.Errorf("unexpected slice name %q", s.Name)
+			continue
 		}
-		if s.Type != string(domain.AccountTypeSubfond) {
-			t.Errorf("slice %s type = %q, want subfond", s.Name, s.Type)
+		if s.Type != wantType {
+			t.Errorf("slice %s type = %q, want %q", s.Name, s.Type, wantType)
 		}
 		if s.Address == "" {
 			t.Errorf("slice %s missing address", s.Name)

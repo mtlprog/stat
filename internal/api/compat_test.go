@@ -22,7 +22,6 @@ func testFundData() domain.FundStructureData {
 		},
 		OtherAccounts: []domain.FundAccountPortfolio{
 			{ID: "GOTHER", Name: "LABR", Type: domain.AccountTypeOther, TotalEURMTL: decimal.NewFromInt(10)},
-			{ID: "GMFB", Name: "MFB", Type: domain.AccountTypeOther, TotalEURMTL: decimal.NewFromInt(30)},
 		},
 		AggregatedTotals: domain.AggregatedTotals{
 			TotalEURMTL:  decimal.NewFromInt(100),
@@ -128,8 +127,8 @@ func TestGetFundStructureCompatLatest(t *testing.T) {
 
 	// Verify otherAccounts present.
 	others, ok := result["otherAccounts"].([]any)
-	if !ok || len(others) != 2 {
-		t.Error("expected 2 otherAccounts")
+	if !ok || len(others) != 1 {
+		t.Error("expected 1 otherAccount")
 	}
 
 	// Verify aggregatedTotals present.

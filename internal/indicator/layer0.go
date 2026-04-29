@@ -10,10 +10,10 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
-// Layer0Calculator computes per-account total values (I51-I53, I56-I60) and BTC rate (I61).
+// Layer0Calculator computes per-account total values (I51-I53, I56, I58-I60) and BTC rate (I61).
 type Layer0Calculator struct{}
 
-func (c *Layer0Calculator) IDs() []int          { return []int{51, 52, 53, 56, 57, 58, 59, 60, 61} }
+func (c *Layer0Calculator) IDs() []int          { return []int{51, 52, 53, 56, 58, 59, 60, 61} }
 func (c *Layer0Calculator) Dependencies() []int { return nil }
 
 func (c *Layer0Calculator) Calculate(_ context.Context, data domain.FundStructureData, _ map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
@@ -24,7 +24,6 @@ func (c *Layer0Calculator) Calculate(_ context.Context, data domain.FundStructur
 		"MCITY":       52,
 		"MABIZ":       53,
 		"APART":       56,
-		"MFB":         57,
 		"MAIN ISSUER": 58,
 		"BOSS":        59,
 		"ADMIN":       60,
