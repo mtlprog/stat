@@ -26,6 +26,7 @@ const stepTimeout = 90 * time.Second
 // Horizon provides the Horizon API calls required to capture live metrics.
 type Horizon interface {
 	FetchAssetStats(ctx context.Context, asset domain.AssetInfo) (horizon.AssetStats, error)
+	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
 	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
 	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
 	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
@@ -95,27 +96,35 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	}
 	done()
 
+	// I24: count of EURMTL trustlines with non-zero balance. Uses a paginated
+	// walk because /assets `accounts.authorized` includes empty trustlines and
+	// would inflate the count by ~3x.
 	done = stage("EURMTL_holders")
 	{
 		stepCtx, cancel := withStepTimeout(ctx)
-		if stats, err := s.horizon.FetchAssetStats(stepCtx, eurmtlAsset); err != nil {
-			slog.Error("metrics: fetch EURMTL stats failed, reusing prior I24", "error", err)
+		minNonZero := decimal.New(1, -7)
+		if count, err := s.horizon.FetchAssetHolderCountByBalance(stepCtx, eurmtlAsset, minNonZero); err != nil {
+			slog.Error("metrics: fetch EURMTL holders failed, reusing prior I24", "error", err)
 			m.EURMTLParticipants = pickPrior(prev, 24)
 		} else {
-			m.EURMTLParticipants = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
+			m.EURMTLParticipants = ptr(decimal.NewFromInt(int64(count)).String())
 		}
 		cancel()
 	}
 	done()
 
+	// I40: count of MTLAP holders with balance ≥1. /assets `accounts.authorized`
+	// for MTLAP returns ~1 because most holders are AUTHORIZED_TO_MAINTAIN_LIABILITIES,
+	// not authorized — so we have to walk and apply the balance filter.
 	done = stage("MTLAP_holders")
 	{
 		stepCtx, cancel := withStepTimeout(ctx)
-		if stats, err := s.horizon.FetchAssetStats(stepCtx, mtlapAsset); err != nil {
-			slog.Error("metrics: fetch MTLAP stats failed, reusing prior I40", "error", err)
+		minOne := decimal.NewFromInt(1)
+		if count, err := s.horizon.FetchAssetHolderCountByBalance(stepCtx, mtlapAsset, minOne); err != nil {
+			slog.Error("metrics: fetch MTLAP holders failed, reusing prior I40", "error", err)
 			m.MTLAPHolders = pickPrior(prev, 40)
 		} else {
-			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(stats.HoldersAuthorized)).String())
+			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(count)).String())
 		}
 		cancel()
 	}
@@ -131,16 +140,16 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	}
 	done()
 
-	done = stage("issuer_dividends_walk")
+	// I11: monthly dividend outflow summed across every fund account that might
+	// be a dividend source (issuer first, then APART/etc). The 30-day rolling
+	// window means the value can legitimately go to zero on the last day a
+	// payment falls off — but the user's expectation is that I11 is a "last
+	// known monthly amount", monotonic between disbursements. So when the live
+	// sum is zero AND yesterday's persisted value was non-zero, we keep
+	// yesterday's value rather than write a zero.
+	done = stage("dividends_walk_all_accounts")
 	{
-		stepCtx, cancel := withStepTimeout(ctx)
-		if div, err := s.horizon.FetchMonthlyEURMTLOutflow(stepCtx, domain.IssuerAddress, s.fundAddrs); err != nil {
-			slog.Error("metrics: fetch monthly dividends failed, reusing prior I11", "error", err)
-			m.MonthlyDividends = pickPrior(prev, 11)
-		} else {
-			m.MonthlyDividends = ptr(div.String())
-		}
-		cancel()
+		m.MonthlyDividends = s.computeI11(ctx, prev)
 	}
 	done()
 
@@ -261,6 +270,36 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 		values = append(values, bal)
 	}
 	return len(merged), median(values), true
+}
+
+// computeI11 sums monthly EURMTL dividend outflow across every fund account.
+// On any per-account walk failure the contribution is treated as zero (logged),
+// so a single Horizon hiccup doesn't poison the whole figure. If the final sum
+// is zero but the prior day had a non-zero I11, we keep yesterday's value —
+// the user-visible cell is meant to be "last known monthly dividend" and must
+// not flicker to zero between monthly disbursements.
+func (s *Service) computeI11(ctx context.Context, prev map[int]indicator.Indicator) *string {
+	total := decimal.Zero
+	for _, addr := range s.fundAddrs {
+		stepCtx, cancel := withStepTimeout(ctx)
+		amt, err := s.horizon.FetchMonthlyEURMTLOutflow(stepCtx, addr, s.fundAddrs)
+		cancel()
+		if err != nil {
+			slog.Error("metrics: fetch dividends from account failed, treating as zero contribution",
+				"account", addr, "error", err)
+			continue
+		}
+		total = total.Add(amt)
+	}
+
+	if total.IsZero() {
+		if priorStr := pickPrior(prev, 11); priorStr != nil && !domain.SafeParse(*priorStr).IsZero() {
+			slog.Error("metrics: I11 sum is zero but prior was non-zero, reusing prior",
+				"prior", *priorStr)
+			return priorStr
+		}
+	}
+	return ptr(total.String())
 }
 
 // fetchDailyVolume returns total EURMTL payment volume in the 24h window

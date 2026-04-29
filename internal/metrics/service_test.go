@@ -18,13 +18,25 @@ import (
 type stubHorizon struct {
 	stats           map[string]horizon.AssetStats
 	statsErr        map[string]error
+	holderCounts    map[string]int
+	holderCountErr  map[string]error
 	holderBalances  map[string]map[string]decimal.Decimal
 	holderErr       map[string]error
-	dividends       decimal.Decimal
-	dividendsErr    error
+	dividends       map[string]decimal.Decimal // by account address
+	dividendsErr    map[string]error
 	dailyVolume     decimal.Decimal
 	dailyVolumeErr  error
 	dividendsCalled int
+}
+
+func (s *stubHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
+	if err, ok := s.holderCountErr[asset.Code]; ok {
+		return 0, err
+	}
+	if c, ok := s.holderCounts[asset.Code]; ok {
+		return c, nil
+	}
+	return 0, nil
 }
 
 func (s *stubHorizon) FetchAssetStats(_ context.Context, asset domain.AssetInfo) (horizon.AssetStats, error) {
@@ -41,9 +53,15 @@ func (s *stubHorizon) FetchAssetHolderBalancesByBalance(_ context.Context, asset
 	return s.holderBalances[asset.Code], nil
 }
 
-func (s *stubHorizon) FetchMonthlyEURMTLOutflow(_ context.Context, _ string, _ []string) (decimal.Decimal, error) {
+func (s *stubHorizon) FetchMonthlyEURMTLOutflow(_ context.Context, accountID string, _ []string) (decimal.Decimal, error) {
 	s.dividendsCalled++
-	return s.dividends, s.dividendsErr
+	if err, ok := s.dividendsErr[accountID]; ok {
+		return decimal.Zero, err
+	}
+	if v, ok := s.dividends[accountID]; ok {
+		return v, nil
+	}
+	return decimal.Zero, nil
 }
 
 func (s *stubHorizon) FetchEURMTLPaymentVolume(_ context.Context, _ time.Time) (decimal.Decimal, error) {
@@ -107,8 +125,10 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		stats: map[string]horizon.AssetStats{
 			"MTL":     {TotalSupply: decimal.NewFromInt(1000), LiquidityPools: decimal.NewFromInt(150)},
 			"MTLRECT": {TotalSupply: decimal.NewFromInt(500), LiquidityPools: decimal.NewFromInt(50)},
-			"EURMTL":  {HoldersAuthorized: 200},
-			"MTLAP":   {HoldersAuthorized: 42},
+		},
+		holderCounts: map[string]int{
+			"EURMTL": 200,
+			"MTLAP":  42,
 		},
 		holderBalances: map[string]map[string]decimal.Decimal{
 			"MTL": {
@@ -121,7 +141,10 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 				"D": decimal.NewFromInt(150),
 			},
 		},
-		dividends:   decimal.RequireFromString("123.45"),
+		dividends: map[string]decimal.Decimal{
+			"GFUND1": decimal.RequireFromString("100"),
+			"GFUND2": decimal.RequireFromString("23.45"),
+		},
 		dailyVolume: decimal.RequireFromString("500.00"),
 	}
 	p := &stubPrice{
@@ -187,14 +210,10 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 	date := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
 	flake := errors.New("503 service unavailable")
 	h := &stubHorizon{
-		statsErr: map[string]error{
-			"MTL":     flake,
-			"MTLRECT": flake,
-			"EURMTL":  flake,
-			"MTLAP":   flake,
-		},
+		statsErr:       map[string]error{"MTL": flake, "MTLRECT": flake},
+		holderCountErr: map[string]error{"EURMTL": flake, "MTLAP": flake},
 		holderErr:      map[string]error{"MTL": flake, "MTLRECT": flake},
-		dividendsErr:   flake,
+		dividendsErr:   map[string]error{"GFUND1": flake, "GFUND2": flake},
 		dailyVolumeErr: flake,
 	}
 	p := &stubPrice{bidErr: map[string]error{"MTL": flake, "MTLRECT": flake}}
