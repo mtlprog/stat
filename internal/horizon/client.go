@@ -27,7 +27,8 @@ func NewClient(baseURL string, maxRetries int, baseDelay time.Duration) *Client 
 	}
 }
 
-// get performs a GET request with retry on 429.
+// get performs a GET request, retrying on transient failures (429 + 5xx) with
+// exponential backoff. Non-transient errors fail fast.
 func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 	url := c.baseURL + path
 
@@ -54,8 +55,8 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 			return body, nil
 		}
 
-		if resp.StatusCode == http.StatusTooManyRequests {
-			lastErr = fmt.Errorf("HTTP 429 at %s (attempt %d/%d)", url, attempt+1, c.maxRetries+1)
+		if isTransient(resp.StatusCode) {
+			lastErr = fmt.Errorf("HTTP %d at %s (attempt %d/%d)", resp.StatusCode, url, attempt+1, c.maxRetries+1)
 			if attempt < c.maxRetries {
 				delay := c.baseDelay * time.Duration(1<<uint(attempt))
 				select {
@@ -72,6 +73,19 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 	}
 
 	return nil, lastErr
+}
+
+// isTransient reports whether status indicates a temporary failure that's
+// worth retrying — 429 (rate-limit) and the standard 5xx gateway-style errors.
+func isTransient(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
 }
 
 // getJSON performs a GET request and unmarshals the JSON response.
