@@ -17,7 +17,7 @@ func SafeParse(value string) decimal.Decimal {
 	}
 	d, err := decimal.NewFromString(value)
 	if err != nil {
-		slog.Warn("SafeParse: malformed decimal value, using zero", "value", value, "error", err)
+		slog.Debug("SafeParse: malformed decimal value, using zero", "value", value, "error", err)
 		return decimal.Zero
 	}
 	return d

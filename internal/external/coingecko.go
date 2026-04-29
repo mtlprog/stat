@@ -89,13 +89,13 @@ func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.D
 	for symbol, coinID := range symbolMapping {
 		prices, ok := raw[coinID]
 		if !ok {
-			slog.Warn("CoinGecko response missing symbol", "symbol", symbol, "coinID", coinID)
+			slog.Debug("CoinGecko response missing symbol", "symbol", symbol, "coinID", coinID)
 			continue
 		}
 		eurStr := prices["eur"].String()
 		eurPrice, err := decimal.NewFromString(eurStr)
 		if err != nil {
-			slog.Warn("CoinGecko price unparseable", "symbol", symbol, "value", eurStr, "error", err)
+			slog.Debug("CoinGecko price unparseable", "symbol", symbol, "value", eurStr, "error", err)
 			continue
 		}
 
@@ -115,7 +115,7 @@ func (c *CoinGeckoClient) FetchPrices(ctx context.Context) (map[string]decimal.D
 		return nil, fmt.Errorf("CoinGecko returned no valid prices (expected %d symbols)", len(symbolMapping))
 	}
 	if len(result) < len(symbolMapping) {
-		slog.Warn("CoinGecko returned partial prices", "got", len(result), "expected", len(symbolMapping))
+		slog.Error("CoinGecko returned partial prices", "got", len(result), "expected", len(symbolMapping))
 	}
 
 	return result, nil

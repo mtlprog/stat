@@ -197,17 +197,17 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 	if (eurmtlErr == nil && xlmErr != nil) || (eurmtlErr != nil && xlmErr == nil) {
 		crossRate, crossErr := s.GetPrice(ctx, domain.EURMTLAsset(), domain.XLMAsset(), "1")
 		if crossErr != nil {
-			slog.Warn("cross-rate derivation failed", "asset", asset.Code, "error", crossErr)
+			slog.Debug("cross-rate derivation failed", "asset", asset.Code, "error", crossErr)
 		} else {
 			rate, rateErr := decimal.NewFromString(crossRate.Price)
 			if rateErr != nil {
-				slog.Warn("cross-rate price unparseable", "price", crossRate.Price, "error", rateErr)
+				slog.Debug("cross-rate price unparseable", "price", crossRate.Price, "error", rateErr)
 			} else if !rate.IsZero() {
 				if eurmtlErr == nil && xlmErr != nil {
 					// Have EURMTL, derive XLM
 					eurmtlPrice, parseErr := decimal.NewFromString(result.PriceEURMTL)
 					if parseErr != nil {
-						slog.Warn("cross-rate: EURMTL price unparseable", "asset", asset.Code, "price", result.PriceEURMTL, "error", parseErr)
+						slog.Debug("cross-rate: EURMTL price unparseable", "asset", asset.Code, "price", result.PriceEURMTL, "error", parseErr)
 					} else {
 						result.PriceXLM = eurmtlPrice.Mul(rate).String()
 					}
@@ -215,7 +215,7 @@ func (s *Service) GetTokenPrices(ctx context.Context, asset domain.AssetInfo, ba
 					// Have XLM, derive EURMTL
 					xlmPrice, parseErr := decimal.NewFromString(result.PriceXLM)
 					if parseErr != nil {
-						slog.Warn("cross-rate: XLM price unparseable", "asset", asset.Code, "price", result.PriceXLM, "error", parseErr)
+						slog.Debug("cross-rate: XLM price unparseable", "asset", asset.Code, "price", result.PriceXLM, "error", parseErr)
 					} else {
 						result.PriceEURMTL = xlmPrice.Div(rate).String()
 					}

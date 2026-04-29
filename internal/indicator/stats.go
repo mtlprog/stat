@@ -28,7 +28,7 @@ func StdDev(values []decimal.Decimal) decimal.Decimal {
 	v := Variance(values)
 	f, exact := v.Float64()
 	if !exact {
-		slog.Warn("precision loss in StdDev float64 conversion", "variance", v.String())
+		slog.Debug("precision loss in StdDev float64 conversion", "variance", v.String())
 	}
 	return decimal.NewFromFloat(math.Sqrt(f))
 }
@@ -61,7 +61,7 @@ func DownsideStdDev(returns []decimal.Decimal, threshold decimal.Decimal) decima
 	variance := sumSqDiff.Div(decimal.NewFromInt(int64(len(downside))))
 	f, exact := variance.Float64()
 	if !exact {
-		slog.Warn("precision loss in DownsideStdDev float64 conversion", "variance", variance.String())
+		slog.Debug("precision loss in DownsideStdDev float64 conversion", "variance", variance.String())
 	}
 	return decimal.NewFromFloat(math.Sqrt(f))
 }

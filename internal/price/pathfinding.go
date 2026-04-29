@@ -20,7 +20,7 @@ func (s *Service) getPathPrice(ctx context.Context, source, dest domain.AssetInf
 		if ctx.Err() != nil {
 			return domain.TokenPairPrice{}, ctx.Err()
 		}
-		slog.Warn("strictSend failed, trying strictReceive",
+		slog.Debug("strictSend failed, trying strictReceive",
 			"source", source.Code, "dest", dest.Code, "error", err)
 	} else if len(paths) > 0 {
 		if price, ok := pathRecordToPrice(paths[0], source, dest); ok {
@@ -47,19 +47,19 @@ func (s *Service) getPathPrice(ctx context.Context, source, dest domain.AssetInf
 func pathRecordToPrice(record horizon.HorizonPathRecord, source, dest domain.AssetInfo) (domain.TokenPairPrice, bool) {
 	srcAmount, err := decimal.NewFromString(record.SourceAmount)
 	if err != nil {
-		slog.Warn("pathRecordToPrice: unparseable source amount",
+		slog.Debug("pathRecordToPrice: unparseable source amount",
 			"source", source.Code, "dest", dest.Code, "value", record.SourceAmount, "error", err)
 		return domain.TokenPairPrice{}, false
 	}
 	if srcAmount.IsZero() {
-		slog.Warn("pathRecordToPrice: zero source amount",
+		slog.Debug("pathRecordToPrice: zero source amount",
 			"source", source.Code, "dest", dest.Code)
 		return domain.TokenPairPrice{}, false
 	}
 
 	destAmount, err := decimal.NewFromString(record.DestinationAmount)
 	if err != nil {
-		slog.Warn("pathRecordToPrice: unparseable destination amount",
+		slog.Debug("pathRecordToPrice: unparseable destination amount",
 			"source", source.Code, "dest", dest.Code, "value", record.DestinationAmount, "error", err)
 		return domain.TokenPairPrice{}, false
 	}
