@@ -35,6 +35,16 @@ psql -d postgres -c "DROP DATABASE stat_smoke"
 
 Migrations auto-run on every subcommand startup (`database.RunMigrations` in each `runX`), so the DB is ready as soon as `serve` (or any other subcommand) connects.
 
+## Smoke testing Horizon-backed code
+
+`stat report` needs Google Sheets credentials (full prod stack). For a quick check of a new metrics/price/horizon code path against live Horizon, drop a throwaway `cmd/<name>/main.go` with `//go:build smoke` at the top, import the relevant internal packages, and run:
+
+```bash
+go run -tags=smoke ./cmd/<name>
+```
+
+Build tag keeps it out of the default binary; delete the directory before committing.
+
 ## Deployment Model (Railway)
 
 The binary uses `github.com/urfave/cli/v2` with subcommands — Railway manages scheduling externally:
@@ -87,6 +97,7 @@ There is no `internal/worker` package; all scheduling is external.
 - Stellar uses 7 decimal places (stroops). Smallest non-zero balance: `0.0000001`.
 - Use `decimal.New(1, -7)` for exact stroop thresholds — avoid `decimal.NewFromFloat` for precision-sensitive values.
 - Asset type is determined by code length: `<=4` chars → `credit_alphanum4`, `5-12` chars → `credit_alphanum12`. Use `domain.AssetTypeFromCode()`.
+- `decimal.Div`/`Mul` keep shopspring's default 16-digit precision. Computed amounts/prices that flow into indicators or LiveMetrics must be `.Round(7)`-ed (half-away-from-zero, matches the Stellar protocol and Horizon's `bid.price`/`ask.price` output) — see `price.stellarPrecision` for the canonical constant.
 
 ## Horizon API Patterns
 
@@ -104,6 +115,9 @@ path = u.Path + "?" + u.RawQuery
 ```
 - Add `Links.Next.Href` field to response structs when pagination is needed.
 - When paginating payments ordered desc by time, **check the timestamp before type/direction filters** so non-payment records don't block early termination.
+
+### Horizon Wire-Format Quirks
+- Trade `price` (`/trades`) returns `{"n": "<int>", "d": "<int>"}` as JSON **strings**, not numbers — int64 stroop ratios can exceed JSON-number safe range. Decode as `string`, parse with `decimal.NewFromString`. Same goes for amounts and balances elsewhere in the API.
 
 ### Testing Horizon Methods
 - Use `httptest.NewServer` + `NewClient(server.URL, 1, 10*time.Millisecond)` for HTTP-level tests (see `assets_test.go`, `account_test.go`).
