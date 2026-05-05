@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -38,10 +39,15 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 		i15 = i11.Div(i5)
 	}
 
-	// I55: Price Year Ago — use GetNearestBefore to find snapshot closest to 365 days ago
+	// I55: Price Year Ago — chained snapshot → indicator-repo lookup. Real DB
+	// errors on either side propagate up; "no data anywhere" resolves to zero.
 	i55 := decimal.Zero
 	if hist != nil {
-		i55 = fetchPriceYearAgo(ctx, hist)
+		v, err := fetchPriceYearAgo(ctx, hist)
+		if err != nil {
+			return nil, fmt.Errorf("fetching price year ago: %w", err)
+		}
+		i55 = v
 	}
 
 	// I54: Annual DPS = I15 * 12 (annualized monthly DPS)
@@ -50,7 +56,11 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 	// Gather 12 months of monthly dividend values for I16 and I33
 	var divs12m []decimal.Decimal
 	if hist != nil {
-		divs12m = fetchMonthlyDividends12m(ctx, hist)
+		v, err := fetchMonthlyDividends12m(ctx, hist)
+		if err != nil {
+			return nil, fmt.Errorf("fetching monthly dividends 12m: %w", err)
+		}
+		divs12m = v
 	}
 
 	// I33: EPS = Median(monthly_divs) * 12 / I5
@@ -99,76 +109,92 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 
 // fetchPriceYearAgo retrieves the MTL price from the snapshot nearest to 365
 // days ago. The chain is: snapshot LiveMetrics → token-price scan in the same
-// snapshot → I10 history in the indicator repository. Any failure mode of the
-// snapshot path (ErrNotFound or transient DB error) falls through to the
-// indicator-repo lookup — the indicator table carries continuous I10 history
-// from the legacy MONITORING import and is the authoritative source for dates
-// preceding the LiveMetrics rollout. Returns zero (and logs Warn) only when
-// every source is exhausted.
-func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) decimal.Decimal {
+// snapshot → I10 history in the indicator repository. Per CLAUDE.md, real DB
+// errors from EITHER source are propagated as errors — they must NOT be
+// conflated with "data not found" (which is the only legitimate signal to
+// chain to the next source). Returns zero (and logs Warn) only when both
+// sources legitimately have no data.
+func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) (decimal.Decimal, error) {
 	yearAgo := time.Now().UTC().AddDate(-1, 0, 0)
 
-	if price := snapshotPriceYearAgo(ctx, hist, yearAgo); !price.IsZero() {
-		return price
+	price, err := snapshotPriceYearAgo(ctx, hist, yearAgo)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	if !price.IsZero() {
+		return price, nil
 	}
 
-	if price := lookupIndicatorAt(ctx, hist, 10, yearAgo); !price.IsZero() {
-		return price
+	price, err = lookupIndicatorAt(ctx, hist, 10, yearAgo)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	if !price.IsZero() {
+		return price, nil
 	}
 
 	slog.Warn("I55 unresolvable — no MTL price found in snapshot, tokens, or indicator history",
 		"slug", hist.Slug, "date", yearAgo.Format("2006-01-02"))
-	return decimal.Zero
+	return decimal.Zero, nil
 }
 
 // snapshotPriceYearAgo returns the year-ago MTL price from the snapshot path
-// (LiveMetrics → tokens), or zero on any miss. Errors are logged but never
-// propagate — the caller chains to the indicator-repo fallback.
-func snapshotPriceYearAgo(ctx context.Context, hist *HistoricalData, yearAgo time.Time) decimal.Decimal {
+// (LiveMetrics → tokens). ErrNotFound and "snapshot exists but has no usable
+// price" both return (zero, nil) so the caller can chain to the indicator
+// repo. Real DB errors and JSON parse failures return a wrapped error — the
+// caller must NOT silently fall through, because that would conflate
+// infrastructure failure with absent data.
+func snapshotPriceYearAgo(ctx context.Context, hist *HistoricalData, yearAgo time.Time) (decimal.Decimal, error) {
 	snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, yearAgo)
 	if err != nil {
-		if !errors.Is(err, snapshot.ErrNotFound) {
-			slog.Error("snapshot lookup for price year ago failed, falling through to indicator repo",
-				"slug", hist.Slug, "date", yearAgo.Format("2006-01-02"), "error", err)
+		if errors.Is(err, snapshot.ErrNotFound) {
+			return decimal.Zero, nil
 		}
-		return decimal.Zero
+		return decimal.Zero, fmt.Errorf("snapshot lookup for price year ago (slug=%s, date=%s): %w",
+			hist.Slug, yearAgo.Format("2006-01-02"), err)
 	}
 	if snap == nil {
-		return decimal.Zero
+		return decimal.Zero, nil
 	}
 
 	var data domain.FundStructureData
 	if err := json.Unmarshal(snap.Data, &data); err != nil {
-		slog.Error("failed to parse historical snapshot data, falling through to indicator repo",
-			"slug", hist.Slug, "error", err)
-		return decimal.Zero
+		return decimal.Zero, fmt.Errorf("parsing historical snapshot data (slug=%s): %w", hist.Slug, err)
 	}
 
 	if data.LiveMetrics != nil && data.LiveMetrics.MTLMarketPrice != nil {
 		if price := domain.SafeParse(*data.LiveMetrics.MTLMarketPrice); !price.IsZero() {
-			return price
+			return price, nil
 		}
 	}
-	return findMTLPrice(data)
+	return findMTLPrice(data), nil
 }
 
 // fetchMonthlyDividends12m collects stored monthly dividend values from the
-// last 12 months. For each of the past 12 calendar months we first try the
-// snapshot's LiveMetrics, then fall back to I11 from the indicator repository
-// (a single batched GetHistory call covers all 12 targets). Months whose value
-// resolves to "missing in both sources" are skipped *and logged* — the median
-// downstream is then computed over fewer samples, but the operator gets a
-// signal.
-func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decimal.Decimal {
+// last 12 months. For each month we first try the snapshot's LiveMetrics,
+// then fall back to I11 from the indicator repository (a single batched
+// GetHistory call covers all 12 targets). Real DB errors from either source
+// propagate up — only legitimate "data not found" triggers fallback. Months
+// missing in both sources are skipped *and logged* — the median downstream
+// is then computed over fewer samples, but the operator gets a signal.
+func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) ([]decimal.Decimal, error) {
 	now := time.Now().UTC()
-	indHist := loadI11History(ctx, hist, now.AddDate(-1, -1, 0))
+
+	indHist, err := loadI11History(ctx, hist, now.AddDate(-1, -1, 0))
+	if err != nil {
+		return nil, err
+	}
 
 	var divs []decimal.Decimal
 	var dropped []string
 	for i := 1; i <= 12; i++ {
 		target := now.AddDate(0, -i, 0)
 
-		if v, ok := monthlyDividendFromSnapshot(ctx, hist, target, i); ok {
+		v, found, err := monthlyDividendFromSnapshot(ctx, hist, target, i)
+		if err != nil {
+			return nil, err
+		}
+		if found {
 			divs = append(divs, v)
 			continue
 		}
@@ -185,53 +211,55 @@ func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decim
 		slog.Warn("monthly dividends: some months missing from both snapshot and indicator history",
 			"slug", hist.Slug, "dropped_months", dropped, "kept", len(divs))
 	}
-	return divs
+	return divs, nil
 }
 
 // monthlyDividendFromSnapshot returns LiveMetrics.MonthlyDividends from the
-// nearest snapshot before target, or (zero, false) on any miss. Errors are
-// logged but never propagate; the caller chains to the indicator-repo path.
-// "Found but legitimately zero" returns (0, true) — that's a real data point.
-func monthlyDividendFromSnapshot(ctx context.Context, hist *HistoricalData, target time.Time, month int) (decimal.Decimal, bool) {
+// nearest snapshot before target. found=false signals "no usable data here,
+// try fallback" (ErrNotFound, nil snapshot, or LiveMetrics absent).
+// "Found but legitimately zero" returns (0, true, nil) — that's a real data
+// point. Real DB errors and JSON parse failures return a wrapped error so
+// the caller does NOT silently chain to indicator-repo (CLAUDE.md: don't
+// conflate not-found with infrastructure failure).
+func monthlyDividendFromSnapshot(ctx context.Context, hist *HistoricalData, target time.Time, month int) (decimal.Decimal, bool, error) {
 	snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, target)
 	if err != nil {
-		if !errors.Is(err, snapshot.ErrNotFound) {
-			slog.Error("snapshot lookup for monthly dividends failed, falling through to indicator repo",
-				"slug", hist.Slug, "month", month, "target", target.Format("2006-01"), "error", err)
+		if errors.Is(err, snapshot.ErrNotFound) {
+			return decimal.Zero, false, nil
 		}
-		return decimal.Zero, false
+		return decimal.Zero, false, fmt.Errorf("snapshot lookup for monthly dividends (slug=%s, month=%d, target=%s): %w",
+			hist.Slug, month, target.Format("2006-01"), err)
 	}
 	if snap == nil {
-		return decimal.Zero, false
+		return decimal.Zero, false, nil
 	}
 
 	var data domain.FundStructureData
 	if err := json.Unmarshal(snap.Data, &data); err != nil {
-		slog.Error("failed to parse snapshot for monthly dividends, falling through to indicator repo",
-			"slug", hist.Slug, "month", month, "error", err)
-		return decimal.Zero, false
+		return decimal.Zero, false, fmt.Errorf("parsing snapshot for monthly dividends (slug=%s, month=%d): %w",
+			hist.Slug, month, err)
 	}
 	if data.LiveMetrics == nil || data.LiveMetrics.MonthlyDividends == nil {
-		return decimal.Zero, false
+		return decimal.Zero, false, nil
 	}
-	return domain.SafeParse(*data.LiveMetrics.MonthlyDividends), true
+	return domain.SafeParse(*data.LiveMetrics.MonthlyDividends), true, nil
 }
 
 // loadI11History fetches all I11 points at or after `from` in a single query
 // so the per-month loop in fetchMonthlyDividends12m doesn't issue 12 separate
-// GetNearestBefore calls. Returns nil on any failure or when the repository
-// is absent — the caller treats that the same as "no I11 in history".
-func loadI11History(ctx context.Context, hist *HistoricalData, from time.Time) []HistoryPoint {
+// GetNearestBefore calls. Returns (nil, nil) when the repository is absent.
+// Real repo errors are wrapped and returned — the caller must not silently
+// proceed without indicator history.
+func loadI11History(ctx context.Context, hist *HistoricalData, from time.Time) ([]HistoryPoint, error) {
 	if hist == nil || hist.IndicatorRepo == nil {
-		return nil
+		return nil, nil
 	}
 	pts, err := hist.IndicatorRepo.GetHistory(ctx, hist.Slug, []int{11}, from)
 	if err != nil {
-		slog.Error("failed to load I11 history from indicator repo",
-			"slug", hist.Slug, "from", from.Format("2006-01-02"), "error", err)
-		return nil
+		return nil, fmt.Errorf("loading I11 history (slug=%s, from=%s): %w",
+			hist.Slug, from.Format("2006-01-02"), err)
 	}
-	return pts
+	return pts, nil
 }
 
 // nearestI11 returns the I11 value at-or-before target from the prefetched
@@ -255,25 +283,28 @@ func nearestI11(history []HistoryPoint, target time.Time) (decimal.Decimal, bool
 }
 
 // lookupIndicatorAt returns the latest value of indicator id at-or-before
-// target from the indicator repository. Returns zero when the repository is
-// absent, the lookup errors, or no row exists. Note: each call issues a full
-// GetNearestBefore (which scans every indicator ID, not just the requested
-// one) — for tight loops over a date range, batch via GetHistory instead.
-func lookupIndicatorAt(ctx context.Context, hist *HistoricalData, id int, target time.Time) decimal.Decimal {
+// target from the indicator repository. (zero, nil) when the repository is
+// absent or no row exists for that id. A real repo error is wrapped and
+// returned — the caller must not silently treat it as "no data" (CLAUDE.md:
+// distinguish ErrNotFound from infrastructure failure).
+//
+// Note: each call issues a full GetNearestBefore (which scans every indicator
+// id, not just the requested one) — for tight loops over a date range, batch
+// via GetHistory instead.
+func lookupIndicatorAt(ctx context.Context, hist *HistoricalData, id int, target time.Time) (decimal.Decimal, error) {
 	if hist == nil || hist.IndicatorRepo == nil {
-		return decimal.Zero
+		return decimal.Zero, nil
 	}
 	res, err := hist.IndicatorRepo.GetNearestBefore(ctx, hist.Slug, target)
 	if err != nil {
-		slog.Error("failed to lookup indicator from repository",
-			"slug", hist.Slug, "id", id, "target", target.Format("2006-01-02"), "error", err)
-		return decimal.Zero
+		return decimal.Zero, fmt.Errorf("indicator repo lookup (slug=%s, id=%d, target=%s): %w",
+			hist.Slug, id, target.Format("2006-01-02"), err)
 	}
 	ind, ok := res[id]
 	if !ok {
-		return decimal.Zero
+		return decimal.Zero, nil
 	}
-	return ind.Value
+	return ind.Value, nil
 }
 
 // findMTLPrice scans all accounts in the snapshot for a stored MTL token price.

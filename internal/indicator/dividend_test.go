@@ -27,7 +27,10 @@ func TestFetchPriceYearAgoFallsBackToIndicatorRepo(t *testing.T) {
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchPriceYearAgo(context.Background(), hist)
+	got, err := fetchPriceYearAgo(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchPriceYearAgo: %v", err)
+	}
 	if !got.Equal(decimal.RequireFromString("6.28")) {
 		t.Errorf("fetchPriceYearAgo = %s, want 6.28 (from indicator repo)", got)
 	}
@@ -49,7 +52,10 @@ func TestFetchPriceYearAgoPrefersSnapshotLiveMetrics(t *testing.T) {
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchPriceYearAgo(context.Background(), hist)
+	got, err := fetchPriceYearAgo(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchPriceYearAgo: %v", err)
+	}
 	if !got.Equal(decimal.RequireFromString("9.42")) {
 		t.Errorf("fetchPriceYearAgo = %s, want 9.42 (snapshot LiveMetrics)", got)
 	}
@@ -64,35 +70,57 @@ func TestFetchPriceYearAgoFallsBackWhenSnapshotMissing(t *testing.T) {
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchPriceYearAgo(context.Background(), hist)
+	got, err := fetchPriceYearAgo(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchPriceYearAgo: %v", err)
+	}
 	if !got.Equal(decimal.RequireFromString("5.5")) {
 		t.Errorf("fetchPriceYearAgo = %s, want 5.5 (indicator repo, snapshot ErrNotFound)", got)
 	}
 }
 
-// A transient snapshot DB error must NOT short-circuit the indicator-repo
-// fallback. A flaky pg connection on the snapshot query is exactly when we
-// most want the alternate source.
-func TestFetchPriceYearAgoFallsThroughOnSnapshotDBError(t *testing.T) {
+// CLAUDE.md: snapshot.ErrNotFound and a real DB error must NOT be conflated.
+// A transient pg blip on the snapshot query has to surface as an error from
+// fetchPriceYearAgo so the caller can fail loud — silently chaining to
+// indicator-repo would mask infrastructure issues as "data unavailable".
+func TestFetchPriceYearAgoPropagatesSnapshotDBError(t *testing.T) {
 	snapRepo := &stubSnapshotRepo{err: errors.New("conn lost")}
+	// Even though indicator-repo could answer, we must NOT fall through.
 	indRepo := &stubIndicatorRepoForDividend{
 		byID: map[int]Indicator{10: {ID: 10, Value: decimal.RequireFromString("4.2")}},
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchPriceYearAgo(context.Background(), hist)
-	if !got.Equal(decimal.RequireFromString("4.2")) {
-		t.Errorf("fetchPriceYearAgo = %s, want 4.2 (fallback despite snapshot error)", got)
+	_, err := fetchPriceYearAgo(context.Background(), hist)
+	if err == nil {
+		t.Fatal("fetchPriceYearAgo err=nil, want error on snapshot DB failure (no silent fallback)")
 	}
 }
 
-// Both sources empty → zero. No panic, just a zero return.
+// Symmetric case: ErrNotFound on snapshot, real DB error on indicator-repo
+// must propagate — chaining sources never "absorbs" a real error.
+func TestFetchPriceYearAgoPropagatesIndicatorRepoError(t *testing.T) {
+	snapRepo := &stubSnapshotRepo{notFound: true}
+	indRepo := &stubIndicatorRepoForDividend{nearestErr: errors.New("conn lost")}
+	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
+
+	_, err := fetchPriceYearAgo(context.Background(), hist)
+	if err == nil {
+		t.Fatal("fetchPriceYearAgo err=nil, want error on indicator-repo DB failure")
+	}
+}
+
+// Both sources empty → (zero, nil). No error, just an honest zero.
 func TestFetchPriceYearAgoReturnsZeroWhenAllSourcesEmpty(t *testing.T) {
 	snapRepo := &stubSnapshotRepo{notFound: true}
 	indRepo := &stubIndicatorRepoForDividend{byID: map[int]Indicator{}}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	if got := fetchPriceYearAgo(context.Background(), hist); !got.IsZero() {
+	got, err := fetchPriceYearAgo(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchPriceYearAgo err = %v, want nil", err)
+	}
+	if !got.IsZero() {
 		t.Errorf("fetchPriceYearAgo = %s, want 0 when both sources empty", got)
 	}
 }
@@ -102,11 +130,14 @@ func TestFetchPriceYearAgoReturnsZeroWhenAllSourcesEmpty(t *testing.T) {
 func TestFetchMonthlyDividends12mUsesIndicatorRepoForMissingMonths(t *testing.T) {
 	snapRepo := &stubSnapshotRepo{notFound: true}
 	indRepo := &stubIndicatorRepoForDividend{
-		history: constantHistory(11, "2926", 13), // 13 monthly points covering 12 lookups
+		history: constantHistory(11, "2926", 13),
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchMonthlyDividends12m(context.Background(), hist)
+	got, err := fetchMonthlyDividends12m(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchMonthlyDividends12m: %v", err)
+	}
 	if len(got) != 12 {
 		t.Fatalf("len = %d, want 12 months filled from indicator repo", len(got))
 	}
@@ -118,11 +149,11 @@ func TestFetchMonthlyDividends12mUsesIndicatorRepoForMissingMonths(t *testing.T)
 }
 
 // Mixed-source: snapshot covers recent months (LiveMetrics era), indicator
-// repo covers older months. The realistic production state for the next ~6
-// months after the LiveMetrics rollout. Use a date-keyed snapshot stub.
+// repo covers older months. Realistic production state for the next ~6
+// months after the LiveMetrics rollout.
 func TestFetchMonthlyDividends12mMixedSnapshotAndRepo(t *testing.T) {
 	now := time.Now().UTC()
-	livePeriodCutoff := now.AddDate(0, -6, 0) // newer than this gets a LiveMetrics snapshot
+	livePeriodCutoff := now.AddDate(0, -6, 0)
 	snapRepo := &stubSnapshotRepo{
 		dateFunc: func(target time.Time) (*snapshot.Snapshot, error) {
 			if target.Before(livePeriodCutoff) {
@@ -139,7 +170,10 @@ func TestFetchMonthlyDividends12mMixedSnapshotAndRepo(t *testing.T) {
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchMonthlyDividends12m(context.Background(), hist)
+	got, err := fetchMonthlyDividends12m(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchMonthlyDividends12m: %v", err)
+	}
 	if len(got) != 12 {
 		t.Fatalf("len = %d, want 12", len(got))
 	}
@@ -175,7 +209,10 @@ func TestFetchMonthlyDividends12mPreservesGenuineZeroFromSnapshot(t *testing.T) 
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
-	got := fetchMonthlyDividends12m(context.Background(), hist)
+	got, err := fetchMonthlyDividends12m(context.Background(), hist)
+	if err != nil {
+		t.Fatalf("fetchMonthlyDividends12m: %v", err)
+	}
 	if len(got) != 12 {
 		t.Fatalf("len = %d, want 12 (zeros preserved)", len(got))
 	}
@@ -186,26 +223,57 @@ func TestFetchMonthlyDividends12mPreservesGenuineZeroFromSnapshot(t *testing.T) 
 	}
 }
 
-// lookupIndicatorAt with no repository wired must return zero, not panic.
-func TestLookupIndicatorAtNilGuards(t *testing.T) {
-	if got := lookupIndicatorAt(context.Background(), nil, 10, time.Now()); !got.IsZero() {
-		t.Errorf("lookupIndicatorAt(nil hist) = %s, want 0", got)
-	}
-	hist := &HistoricalData{Slug: "mtlf"} // IndicatorRepo nil
-	if got := lookupIndicatorAt(context.Background(), hist, 10, time.Now()); !got.IsZero() {
-		t.Errorf("lookupIndicatorAt(nil IndicatorRepo) = %s, want 0", got)
+// Snapshot DB error during the per-month walk must propagate, not silently
+// fall back to indicator-repo (CLAUDE.md non-conflation rule).
+func TestFetchMonthlyDividends12mPropagatesSnapshotDBError(t *testing.T) {
+	snapRepo := &stubSnapshotRepo{err: errors.New("conn lost")}
+	indRepo := &stubIndicatorRepoForDividend{history: constantHistory(11, "2926", 13)}
+	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
+
+	_, err := fetchMonthlyDividends12m(context.Background(), hist)
+	if err == nil {
+		t.Fatal("fetchMonthlyDividends12m err=nil, want error on snapshot DB failure")
 	}
 }
 
-// lookupIndicatorAt returns zero on a real repo error and never panics on a
-// nil response map.
-func TestLookupIndicatorAtRepoError(t *testing.T) {
+// Indicator-repo GetHistory error must propagate, not be silently treated
+// as "no history" — that would conflate infrastructure failure with data
+// absence.
+func TestFetchMonthlyDividends12mPropagatesIndicatorRepoError(t *testing.T) {
+	snapRepo := &stubSnapshotRepo{notFound: true}
+	indRepo := &stubIndicatorRepoForDividend{historyErr: errors.New("conn lost")}
+	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
+
+	_, err := fetchMonthlyDividends12m(context.Background(), hist)
+	if err == nil {
+		t.Fatal("fetchMonthlyDividends12m err=nil, want error on indicator-repo failure")
+	}
+}
+
+// lookupIndicatorAt with no repository wired must return zero, not panic
+// or error — that's "not configured", indistinguishable from "no data".
+func TestLookupIndicatorAtNilGuards(t *testing.T) {
+	v, err := lookupIndicatorAt(context.Background(), nil, 10, time.Now())
+	if err != nil || !v.IsZero() {
+		t.Errorf("lookupIndicatorAt(nil hist) = (%s, %v), want (0, nil)", v, err)
+	}
+	hist := &HistoricalData{Slug: "mtlf"}
+	v, err = lookupIndicatorAt(context.Background(), hist, 10, time.Now())
+	if err != nil || !v.IsZero() {
+		t.Errorf("lookupIndicatorAt(nil IndicatorRepo) = (%s, %v), want (0, nil)", v, err)
+	}
+}
+
+// A real repo error is wrapped and propagated. CLAUDE.md: never conflate
+// ErrNotFound with connection/query failures.
+func TestLookupIndicatorAtRepoErrorPropagates(t *testing.T) {
 	hist := &HistoricalData{
 		Slug:          "mtlf",
 		IndicatorRepo: &stubIndicatorRepoForDividend{nearestErr: errors.New("conn lost")},
 	}
-	if got := lookupIndicatorAt(context.Background(), hist, 10, time.Now()); !got.IsZero() {
-		t.Errorf("lookupIndicatorAt(repo err) = %s, want 0", got)
+	_, err := lookupIndicatorAt(context.Background(), hist, 10, time.Now())
+	if err == nil {
+		t.Fatal("lookupIndicatorAt err=nil, want wrapped error")
 	}
 }
 
@@ -215,7 +283,6 @@ func TestLookupIndicatorAtRepoError(t *testing.T) {
 func TestDividendCalculatorEndToEndUsesIndicatorRepoForI55(t *testing.T) {
 	snapRepo := &stubSnapshotRepo{notFound: true}
 	indRepo := &stubIndicatorRepoForDividend{
-		// I10 year-ago = 6.28 (ratio with i10=6.7 keeps factor in (0,1)).
 		byID:    map[int]Indicator{10: {ID: 10, Value: decimal.RequireFromString("6.28")}},
 		history: constantHistory(11, "2440.7", 13),
 	}
@@ -250,10 +317,26 @@ func TestDividendCalculatorEndToEndUsesIndicatorRepoForI55(t *testing.T) {
 	if by[17].IsZero() {
 		t.Errorf("I17 = 0, want non-zero")
 	}
-	// Sanity check: I17 = (I54 / I55) * 100.
 	wantI17 := by[54].Div(by[55]).Mul(decimal.NewFromInt(100))
 	if !by[17].Equal(wantI17) {
 		t.Errorf("I17 = %s, want %s ((I54/I55)*100)", by[17], wantI17)
+	}
+}
+
+// DividendCalculator.Calculate must propagate underlying DB errors so a
+// failed daily report is loud, not silently zero.
+func TestDividendCalculatorPropagatesSnapshotDBError(t *testing.T) {
+	snapRepo := &stubSnapshotRepo{err: errors.New("conn lost")}
+	indRepo := &stubIndicatorRepoForDividend{}
+	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
+
+	deps := map[int]Indicator{
+		5:  {ID: 5, Value: decimal.NewFromInt(58000)},
+		10: {ID: 10, Value: decimal.RequireFromString("6.7")},
+	}
+	_, err := (&DividendCalculator{}).Calculate(context.Background(), domain.FundStructureData{}, deps, hist)
+	if err == nil {
+		t.Fatal("Calculate err=nil, want propagated DB error")
 	}
 }
 
