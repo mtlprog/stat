@@ -439,6 +439,22 @@ func TestEnrichMetricsI18StickyOnEURMTLHoldersFailure(t *testing.T) {
 	}
 }
 
+// Empty merged map → I18 must be 0 with ok=true. The intersection of an
+// empty set with anything is empty; nil maps must not panic.
+func TestComputeI18EmptyMerged(t *testing.T) {
+	h := &stubHorizon{
+		holderIDs: map[string][]string{"EURMTL": {"A", "B", "C"}},
+	}
+	svc := NewService(h, &stubPrice{}, nil, nil)
+	got, ok := svc.computeI18(context.Background(), domain.EURMTLAsset(), nil)
+	if !ok {
+		t.Fatal("computeI18(nil merged) ok=false, want true")
+	}
+	if got != 0 {
+		t.Errorf("computeI18(nil merged) = %d, want 0", got)
+	}
+}
+
 // computeI18 filters merged shareholders by sum>1 before intersecting with
 // EURMTL holders. An account with combined balance exactly 1 must NOT count.
 func TestComputeI18FiltersSumGreaterThanOne(t *testing.T) {
