@@ -158,6 +158,11 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 			m.EURMTLShareholders = pickPrior(prev, 18)
 		}
 	} else {
+		// Cascade: a failed shareholder walk (logged inside fetchShareholderStats)
+		// degrades I27, I23, AND I18 simultaneously. Surface this explicitly so
+		// an operator reading the logs doesn't have to infer the second-order
+		// effect from a single MTL/MTLRECT error line.
+		slog.Warn("metrics: I18 falls back to prior because the shareholder walk failed upstream (cascade with I27, I23)")
 		m.EURMTLShareholders = pickPrior(prev, 18)
 	}
 	done()
@@ -316,6 +321,10 @@ func (s *Service) computeI18(ctx context.Context, eurmtlAsset domain.AssetInfo, 
 		return 0, false
 	}
 
+	// Strictly > 1, not ≥ 1, on purpose: the legacy Python rule was
+	// `mtl_mtlrect_balance > 1` (scripts/update_report.py
+	// calculate_statistics). I27 uses ≥ 1 because Horizon is queried per asset
+	// with minBalance=1 — that's a separate eligibility set. Don't unify them.
 	one := decimal.NewFromInt(1)
 	eligible := make(map[string]struct{}, len(merged))
 	for id, bal := range merged {
