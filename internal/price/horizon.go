@@ -13,4 +13,5 @@ type HorizonClient interface {
 	FetchStrictSendPaths(ctx context.Context, source domain.AssetInfo, amount string, dest domain.AssetInfo) ([]horizon.HorizonPathRecord, error)
 	FetchStrictReceivePaths(ctx context.Context, source domain.AssetInfo, dest domain.AssetInfo, amount string) ([]horizon.HorizonPathRecord, error)
 	FetchLiquidityPools(ctx context.Context, reserveA, reserveB domain.AssetInfo) ([]horizon.HorizonLiquidityPool, error)
+	FetchTrades(ctx context.Context, base, counter domain.AssetInfo, limit int) ([]horizon.HorizonTrade, error)
 }
