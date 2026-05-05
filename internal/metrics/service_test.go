@@ -22,6 +22,8 @@ type stubHorizon struct {
 	holderCountErr  map[string]error
 	holderBalances  map[string]map[string]decimal.Decimal
 	holderErr       map[string]error
+	holderIDs       map[string][]string
+	holderIDsErr    map[string]error
 	dividends       map[string]decimal.Decimal // by account address
 	dividendsErr    map[string]error
 	dailyVolume     decimal.Decimal
@@ -51,6 +53,13 @@ func (s *stubHorizon) FetchAssetHolderBalancesByBalance(_ context.Context, asset
 		return nil, err
 	}
 	return s.holderBalances[asset.Code], nil
+}
+
+func (s *stubHorizon) FetchAssetHolderIDsByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) ([]string, error) {
+	if err, ok := s.holderIDsErr[asset.Code]; ok {
+		return nil, err
+	}
+	return s.holderIDs[asset.Code], nil
 }
 
 func (s *stubHorizon) FetchMonthlyEURMTLOutflow(_ context.Context, accountID string, _ []string) (decimal.Decimal, error) {
@@ -141,6 +150,11 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 				"D": decimal.NewFromInt(150),
 			},
 		},
+		holderIDs: map[string][]string{
+			// EURMTL trustline holders. A and C are also shareholders → I18 = 2.
+			// X and Y are outsiders. B and D are shareholders without EURMTL.
+			"EURMTL": {"A", "C", "X", "Y"},
+		},
 		dividends: map[string]decimal.Decimal{
 			"GFUND1": decimal.RequireFromString("100"),
 			"GFUND2": decimal.RequireFromString("23.45"),
@@ -187,8 +201,9 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		{"I7 MTLRECT circulation", m.MTLRECTCirculation, "450"}, // 500 - 50
 		{"I24 EURMTL participants", m.EURMTLParticipants, "200"},
 		{"I40 MTLAP holders", m.MTLAPHolders, "42"},
-		{"I27 shareholders", m.MTLShareholders, "4"},   // A,B,C,D unique
-		{"I23 median", m.MTLShareholdersMedian, "200"}, // sorted [100,150,250,300]
+		{"I27 shareholders", m.MTLShareholders, "4"},           // A,B,C,D unique
+		{"I23 median", m.MTLShareholdersMedian, "200"},         // sorted [100,150,250,300]
+		{"I18 EURMTL shareholders", m.EURMTLShareholders, "2"}, // {A,B,C,D} ∩ {A,C,X,Y} = {A,C}
 		{"I11 dividends", m.MonthlyDividends, "123.45"},
 		{"I25 daily volume", m.EURMTLDailyVolume, "500"},
 		{"I26 incremental", m.EURMTL30dVolume, "12150"}, // 12000 + 500 - 350
@@ -213,6 +228,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		statsErr:       map[string]error{"MTL": flake, "MTLRECT": flake},
 		holderCountErr: map[string]error{"EURMTL": flake, "MTLAP": flake},
 		holderErr:      map[string]error{"MTL": flake, "MTLRECT": flake},
+		holderIDsErr:   map[string]error{"EURMTL": flake},
 		dividendsErr:   map[string]error{"GFUND1": flake, "GFUND2": flake},
 		dailyVolumeErr: flake,
 	}
@@ -221,7 +237,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 	repo := &stubIndicatorRepo{
 		byTarget: map[string]map[int]indicator.Indicator{
 			"latest": indicatorMap(map[int]string{
-				6: "777", 7: "333", 10: "9.1", 11: "100", 23: "55", 24: "180",
+				6: "777", 7: "333", 10: "9.1", 11: "100", 18: "120", 23: "55", 24: "180",
 				25: "410", 26: "11500", 27: "5", 40: "33", 49: "0.7",
 			}),
 		},
@@ -244,6 +260,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		"I7":  {m.MTLRECTCirculation, "333"},
 		"I10": {m.MTLMarketPrice, "9.1"},
 		"I11": {m.MonthlyDividends, "100"},
+		"I18": {m.EURMTLShareholders, "120"},
 		"I23": {m.MTLShareholdersMedian, "55"},
 		"I24": {m.EURMTLParticipants, "180"},
 		"I25": {m.EURMTLDailyVolume, "410"},
@@ -386,6 +403,63 @@ func TestComputeI11WritesZeroWhenPriorIsAlsoZero(t *testing.T) {
 	got := svc.computeI11(context.Background(), indicatorMap(map[int]string{11: "0"}))
 	if got == nil || *got != "0" {
 		t.Errorf("computeI11 = %v, want \"0\" (live zero, prior zero)", got)
+	}
+}
+
+// I18 must fall back to prior when the EURMTL holder-IDs walk fails, even if
+// the shareholder walk succeeded — otherwise a single Horizon hiccup on
+// /accounts?asset=EURMTL would silently zero out the column.
+func TestEnrichMetricsI18StickyOnEURMTLHoldersFailure(t *testing.T) {
+	date := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+	flake := errors.New("503 service unavailable")
+	h := &stubHorizon{
+		holderBalances: map[string]map[string]decimal.Decimal{
+			"MTL":     {"A": decimal.NewFromInt(50)},
+			"MTLRECT": {"B": decimal.NewFromInt(60)},
+		},
+		holderIDsErr: map[string]error{"EURMTL": flake},
+	}
+	repo := &stubIndicatorRepo{
+		byTarget: map[string]map[int]indicator.Indicator{
+			"latest": indicatorMap(map[int]string{18: "347"}),
+		},
+	}
+	svc := NewService(h, &stubPrice{}, repo, nil)
+	data := &domain.FundStructureData{}
+
+	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data.LiveMetrics.EURMTLShareholders == nil || *data.LiveMetrics.EURMTLShareholders != "347" {
+		t.Errorf("EURMTLShareholders = %v, want 347 (sticky-fallback)", data.LiveMetrics.EURMTLShareholders)
+	}
+	// I27 must still reflect the live shareholder walk that succeeded.
+	if data.LiveMetrics.MTLShareholders == nil || *data.LiveMetrics.MTLShareholders != "2" {
+		t.Errorf("MTLShareholders = %v, want 2 (live, not sticky)", data.LiveMetrics.MTLShareholders)
+	}
+}
+
+// computeI18 filters merged shareholders by sum>1 before intersecting with
+// EURMTL holders. An account with combined balance exactly 1 must NOT count.
+func TestComputeI18FiltersSumGreaterThanOne(t *testing.T) {
+	merged := map[string]decimal.Decimal{
+		"A": decimal.RequireFromString("1.0"),  // exactly 1 — excluded
+		"B": decimal.RequireFromString("1.01"), // > 1 — included
+		"C": decimal.NewFromInt(50),            // > 1 — included
+		"D": decimal.RequireFromString("0.5"),  // < 1 — excluded
+	}
+	h := &stubHorizon{
+		holderIDs: map[string][]string{
+			"EURMTL": {"A", "B", "C", "D", "Z"},
+		},
+	}
+	svc := NewService(h, &stubPrice{}, nil, nil)
+	got, ok := svc.computeI18(context.Background(), domain.EURMTLAsset(), merged)
+	if !ok {
+		t.Fatal("computeI18 ok=false, want true")
+	}
+	if got != 2 {
+		t.Errorf("computeI18 = %d, want 2 (B and C only)", got)
 	}
 }
 

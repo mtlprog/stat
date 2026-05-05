@@ -98,57 +98,90 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 }
 
 // fetchPriceYearAgo retrieves the MTL price from the snapshot nearest to 365 days ago.
-// It checks LiveMetrics first, then falls back to scanning stored token prices.
+// It checks LiveMetrics first, then falls back to scanning stored token prices,
+// and finally to the indicator repository (which carries I10 history imported
+// from the legacy MONITORING sheet, predating the snapshot table).
 func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) decimal.Decimal {
 	yearAgo := time.Now().UTC().AddDate(-1, 0, 0)
 	snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, yearAgo)
-	if err != nil {
-		if !errors.Is(err, snapshot.ErrNotFound) {
-			slog.Error("failed to fetch historical snapshot for price year ago", "date", yearAgo.Format("2006-01-02"), "error", err)
-		}
+	if err != nil && !errors.Is(err, snapshot.ErrNotFound) {
+		slog.Error("failed to fetch historical snapshot for price year ago", "date", yearAgo.Format("2006-01-02"), "error", err)
 		return decimal.Zero
 	}
 
-	var historicalData domain.FundStructureData
-	if err := json.Unmarshal(snap.Data, &historicalData); err != nil {
-		slog.Error("failed to parse historical snapshot data", "error", err)
-		return decimal.Zero
-	}
-
-	if historicalData.LiveMetrics != nil && historicalData.LiveMetrics.MTLMarketPrice != nil {
-		price := domain.SafeParse(*historicalData.LiveMetrics.MTLMarketPrice)
-		if !price.IsZero() {
-			return price
+	if snap != nil {
+		var historicalData domain.FundStructureData
+		if err := json.Unmarshal(snap.Data, &historicalData); err != nil {
+			slog.Error("failed to parse historical snapshot data", "error", err)
+		} else {
+			if historicalData.LiveMetrics != nil && historicalData.LiveMetrics.MTLMarketPrice != nil {
+				if price := domain.SafeParse(*historicalData.LiveMetrics.MTLMarketPrice); !price.IsZero() {
+					return price
+				}
+			}
+			if price := findMTLPrice(historicalData); !price.IsZero() {
+				return price
+			}
 		}
 	}
-	return findMTLPrice(historicalData)
+
+	return lookupIndicatorAt(ctx, hist, 10, yearAgo)
 }
 
-// fetchMonthlyDividends12m collects stored monthly dividend values from the last 12 months
-// by querying the nearest snapshot for each of the past 12 calendar months.
+// fetchMonthlyDividends12m collects stored monthly dividend values from the last 12 months.
+// For each of the past 12 calendar months we first try the snapshot's LiveMetrics,
+// then fall back to I11 in the indicator repository — months that predate the
+// LiveMetrics rollout (Feb 2026) only have I11 in the legacy-imported indicator
+// history.
 func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) []decimal.Decimal {
 	var divs []decimal.Decimal
 	now := time.Now().UTC()
 	for i := 1; i <= 12; i++ {
 		target := now.AddDate(0, -i, 0)
+
+		var fromSnap decimal.Decimal
 		snap, err := hist.Repo.GetNearestBefore(ctx, hist.Slug, target)
-		if err != nil {
-			if !errors.Is(err, snapshot.ErrNotFound) {
-				slog.Error("failed to fetch snapshot for monthly dividends",
-					"month", i, "target", target.Format("2006-01"), "error", err)
+		if err != nil && !errors.Is(err, snapshot.ErrNotFound) {
+			slog.Error("failed to fetch snapshot for monthly dividends",
+				"month", i, "target", target.Format("2006-01"), "error", err)
+		} else if snap != nil {
+			var data domain.FundStructureData
+			if err := json.Unmarshal(snap.Data, &data); err != nil {
+				slog.Error("failed to parse snapshot for monthly dividends", "month", i, "error", err)
+			} else if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {
+				fromSnap = domain.SafeParse(*data.LiveMetrics.MonthlyDividends)
 			}
+		}
+
+		if !fromSnap.IsZero() {
+			divs = append(divs, fromSnap)
 			continue
 		}
-		var data domain.FundStructureData
-		if err := json.Unmarshal(snap.Data, &data); err != nil {
-			slog.Error("failed to parse snapshot for monthly dividends", "month", i, "error", err)
-			continue
-		}
-		if data.LiveMetrics != nil && data.LiveMetrics.MonthlyDividends != nil {
-			divs = append(divs, domain.SafeParse(*data.LiveMetrics.MonthlyDividends))
+
+		if v := lookupIndicatorAt(ctx, hist, 11, target); !v.IsZero() {
+			divs = append(divs, v)
 		}
 	}
 	return divs
+}
+
+// lookupIndicatorAt returns the value of indicator id at-or-before target from
+// the indicator repository, or zero when the repository is absent / has no data.
+func lookupIndicatorAt(ctx context.Context, hist *HistoricalData, id int, target time.Time) decimal.Decimal {
+	if hist == nil || hist.IndicatorRepo == nil {
+		return decimal.Zero
+	}
+	res, err := hist.IndicatorRepo.GetNearestBefore(ctx, hist.Slug, target)
+	if err != nil {
+		slog.Error("failed to lookup indicator from repository",
+			"id", id, "target", target.Format("2006-01-02"), "error", err)
+		return decimal.Zero
+	}
+	ind, ok := res[id]
+	if !ok {
+		return decimal.Zero
+	}
+	return ind.Value
 }
 
 // findMTLPrice scans all accounts in the snapshot for a stored MTL token price.
