@@ -133,7 +133,10 @@ func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) (decimal.Decim
 		return price, nil
 	}
 
-	slog.Warn("I55 unresolvable — no MTL price found in snapshot, tokens, or indicator history",
+	// Info, not Error: this just means the fund has no I10 history at-or-before
+	// the year-ago date. Common in a fresh DB; not actionable per-run. A real
+	// DB failure would already have surfaced as a propagated error above.
+	slog.Info("I55 unresolvable — no MTL price found in snapshot, tokens, or indicator history",
 		"slug", hist.Slug, "date", yearAgo.Format("2006-01-02"))
 	return decimal.Zero, nil
 }
@@ -208,7 +211,9 @@ func fetchMonthlyDividends12m(ctx context.Context, hist *HistoricalData) ([]deci
 	}
 
 	if len(dropped) > 0 {
-		slog.Warn("monthly dividends: some months missing from both snapshot and indicator history",
+		// Info, not Error: median over fewer points is the documented degraded
+		// behaviour, not an outage. Real DB failures already propagated above.
+		slog.Info("monthly dividends: some months missing from both snapshot and indicator history",
 			"slug", hist.Slug, "dropped_months", dropped, "kept", len(divs))
 	}
 	return divs, nil

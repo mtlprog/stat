@@ -158,11 +158,11 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 			m.EURMTLShareholders = pickPrior(prev, 18)
 		}
 	} else {
-		// Cascade: a failed shareholder walk (logged inside fetchShareholderStats)
-		// degrades I27, I23, AND I18 simultaneously. Surface this explicitly so
-		// an operator reading the logs doesn't have to infer the second-order
-		// effect from a single MTL/MTLRECT error line.
-		slog.Warn("metrics: I18 falls back to prior because the shareholder walk failed upstream (cascade with I27, I23)")
+		// Cascade: a failed shareholder walk (already logged at Error inside
+		// fetchShareholderStats) degrades I27, I23, AND I18 simultaneously.
+		// Info-level surface so the second-order effect is visible without
+		// duplicating the upstream Error severity.
+		slog.Info("metrics: I18 falls back to prior because the shareholder walk failed upstream (cascade with I27, I23)")
 		m.EURMTLShareholders = pickPrior(prev, 18)
 	}
 	done()
