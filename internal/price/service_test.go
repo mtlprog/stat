@@ -18,6 +18,8 @@ type mockHorizon struct {
 	orderbookErr       error
 	pools              []horizon.HorizonLiquidityPool
 	poolsErr           error
+	trades             []horizon.HorizonTrade
+	tradesErr          error
 }
 
 func (m *mockHorizon) FetchOrderbook(_ context.Context, _, _ domain.AssetInfo, _ int) (horizon.HorizonOrderbook, error) {
@@ -34,6 +36,10 @@ func (m *mockHorizon) FetchStrictReceivePaths(_ context.Context, _ domain.AssetI
 
 func (m *mockHorizon) FetchLiquidityPools(_ context.Context, _, _ domain.AssetInfo) ([]horizon.HorizonLiquidityPool, error) {
 	return m.pools, m.poolsErr
+}
+
+func (m *mockHorizon) FetchTrades(_ context.Context, _, _ domain.AssetInfo, _ int) ([]horizon.HorizonTrade, error) {
+	return m.trades, m.tradesErr
 }
 
 func TestGetPricePathOnly(t *testing.T) {
@@ -249,42 +255,90 @@ func TestGetPathPriceFallbackToStrictReceive(t *testing.T) {
 	}
 }
 
-func TestGetBidPriceSuccess(t *testing.T) {
+func TestGetAverageTradePriceMixedDirections(t *testing.T) {
+	// Trade 1: base=MTL, n=17, d=2  → price = 17/2  = 8.5
+	// Trade 2: base=EURMTL (inverted), n=2, d=17 → price = 17/2 = 8.5
 	mock := &mockHorizon{
-		orderbook: horizon.HorizonOrderbook{
-			Bids: []horizon.HorizonOrderbookEntry{{Price: "1.5", Amount: "100"}},
+		trades: []horizon.HorizonTrade{
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "17", D: "2"}},
+			{BaseAssetCode: "EURMTL", Price: &horizon.HorizonTradePrice{N: "2", D: "17"}},
 		},
 	}
-
 	svc := NewService(mock)
-	bid, err := svc.GetBidPrice(context.Background(), testAsset(), domain.EURMTLAsset())
+	avg, err := svc.GetAverageTradePrice(context.Background(), testAsset(), domain.EURMTLAsset(), 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if bid.String() != "1.5" {
-		t.Errorf("bid = %s, want 1.5", bid.String())
+	if avg.String() != "8.5" {
+		t.Errorf("avg = %s, want 8.5", avg.String())
 	}
 }
 
-func TestGetBidPriceNoBids(t *testing.T) {
+func TestGetAverageTradePriceArithmeticMean(t *testing.T) {
+	// Three trades with same base ordering: prices 1, 2, 3 → mean = 2.
 	mock := &mockHorizon{
-		orderbook: horizon.HorizonOrderbook{},
+		trades: []horizon.HorizonTrade{
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "1", D: "1"}},
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "2", D: "1"}},
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "3", D: "1"}},
+		},
 	}
-
 	svc := NewService(mock)
-	_, err := svc.GetBidPrice(context.Background(), testAsset(), domain.EURMTLAsset())
+	avg, err := svc.GetAverageTradePrice(context.Background(), testAsset(), domain.EURMTLAsset(), 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if avg.String() != "2" {
+		t.Errorf("avg = %s, want 2", avg.String())
+	}
+}
+
+func TestGetAverageTradePriceSkipsBadEntries(t *testing.T) {
+	// One usable trade, one with d=0, one with nil price, one with unparseable n.
+	mock := &mockHorizon{
+		trades: []horizon.HorizonTrade{
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "10", D: "1"}},
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "1", D: "0"}},
+			{BaseAssetCode: "MTL", Price: nil},
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "abc", D: "1"}},
+		},
+	}
+	svc := NewService(mock)
+	avg, err := svc.GetAverageTradePrice(context.Background(), testAsset(), domain.EURMTLAsset(), 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if avg.String() != "10" {
+		t.Errorf("avg = %s, want 10 (only one valid trade)", avg.String())
+	}
+}
+
+func TestGetAverageTradePriceNoTrades(t *testing.T) {
+	mock := &mockHorizon{trades: nil}
+	svc := NewService(mock)
+	_, err := svc.GetAverageTradePrice(context.Background(), testAsset(), domain.EURMTLAsset(), 100)
 	if !errors.Is(err, ErrNoPrice) {
 		t.Errorf("err = %v, want ErrNoPrice", err)
 	}
 }
 
-func TestGetBidPriceFetchError(t *testing.T) {
+func TestGetAverageTradePriceAllUnparseable(t *testing.T) {
 	mock := &mockHorizon{
-		orderbookErr: errors.New("network error"),
+		trades: []horizon.HorizonTrade{
+			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "x", D: "y"}},
+		},
 	}
-
 	svc := NewService(mock)
-	_, err := svc.GetBidPrice(context.Background(), testAsset(), domain.EURMTLAsset())
+	_, err := svc.GetAverageTradePrice(context.Background(), testAsset(), domain.EURMTLAsset(), 100)
+	if !errors.Is(err, ErrNoPrice) {
+		t.Errorf("err = %v, want ErrNoPrice", err)
+	}
+}
+
+func TestGetAverageTradePriceFetchError(t *testing.T) {
+	mock := &mockHorizon{tradesErr: errors.New("network error")}
+	svc := NewService(mock)
+	_, err := svc.GetAverageTradePrice(context.Background(), testAsset(), domain.EURMTLAsset(), 100)
 	if err == nil {
 		t.Error("expected error, got nil")
 	}
@@ -314,6 +368,10 @@ func (m *assetAwareMockHorizon) FetchOrderbook(_ context.Context, _, _ domain.As
 
 func (m *assetAwareMockHorizon) FetchLiquidityPools(_ context.Context, _, _ domain.AssetInfo) ([]horizon.HorizonLiquidityPool, error) {
 	return nil, m.poolsErr
+}
+
+func (m *assetAwareMockHorizon) FetchTrades(_ context.Context, _, _ domain.AssetInfo, _ int) ([]horizon.HorizonTrade, error) {
+	return nil, nil
 }
 
 func TestGetTokenPricesCrossRateFromXLM(t *testing.T) {

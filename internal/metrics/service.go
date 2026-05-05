@@ -34,8 +34,13 @@ type Horizon interface {
 
 // PriceSource provides market price lookups.
 type PriceSource interface {
-	GetBidPrice(ctx context.Context, asset, baseAsset domain.AssetInfo) (decimal.Decimal, error)
+	GetAverageTradePrice(ctx context.Context, base, counter domain.AssetInfo, limit int) (decimal.Decimal, error)
 }
+
+// tradesAvgWindow is the number of most-recent trades averaged to produce
+// market-price indicators (I10 for MTL, I49 for MTLRECT). Matches the legacy
+// Python `stellar_get_trade_cost`.
+const tradesAvgWindow = 100
 
 // Service captures live metrics and writes them to FundStructureData.LiveMetrics.
 // It is the single point of contact with Horizon for snapshot-time live values —
@@ -166,27 +171,27 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	m.EURMTL30dVolume = s.computeI26(ctx, date, dailyVol, dailyOK, prev)
 	done()
 
-	done = stage("MTL_bid")
+	done = stage("MTL_trades_avg")
 	{
 		stepCtx, cancel := withStepTimeout(ctx)
-		if bid, err := s.price.GetBidPrice(stepCtx, mtlAsset, eurmtlAsset); err != nil {
-			slog.Error("metrics: fetch MTL bid price failed, reusing prior I10", "error", err)
+		if avg, err := s.price.GetAverageTradePrice(stepCtx, mtlAsset, eurmtlAsset, tradesAvgWindow); err != nil {
+			slog.Error("metrics: fetch MTL trades-average failed, reusing prior I10", "error", err)
 			m.MTLMarketPrice = pickPrior(prev, 10)
 		} else {
-			m.MTLMarketPrice = ptr(bid.String())
+			m.MTLMarketPrice = ptr(avg.String())
 		}
 		cancel()
 	}
 	done()
 
-	done = stage("MTLRECT_bid")
+	done = stage("MTLRECT_trades_avg")
 	{
 		stepCtx, cancel := withStepTimeout(ctx)
-		if bid, err := s.price.GetBidPrice(stepCtx, mtlrectAsset, eurmtlAsset); err != nil {
-			slog.Error("metrics: fetch MTLRECT bid price failed, reusing prior I49", "error", err)
+		if avg, err := s.price.GetAverageTradePrice(stepCtx, mtlrectAsset, eurmtlAsset, tradesAvgWindow); err != nil {
+			slog.Error("metrics: fetch MTLRECT trades-average failed, reusing prior I49", "error", err)
 			m.MTLRECTMarketPrice = pickPrior(prev, 49)
 		} else {
-			m.MTLRECTMarketPrice = ptr(bid.String())
+			m.MTLRECTMarketPrice = ptr(avg.String())
 		}
 		cancel()
 	}

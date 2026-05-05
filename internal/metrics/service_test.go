@@ -69,15 +69,15 @@ func (s *stubHorizon) FetchEURMTLPaymentVolume(_ context.Context, _ time.Time) (
 }
 
 type stubPrice struct {
-	bidByAsset map[string]decimal.Decimal
-	bidErr     map[string]error
+	avgByAsset map[string]decimal.Decimal
+	avgErr     map[string]error
 }
 
-func (s *stubPrice) GetBidPrice(_ context.Context, asset, _ domain.AssetInfo) (decimal.Decimal, error) {
-	if err, ok := s.bidErr[asset.Code]; ok {
+func (s *stubPrice) GetAverageTradePrice(_ context.Context, base, _ domain.AssetInfo, _ int) (decimal.Decimal, error) {
+	if err, ok := s.avgErr[base.Code]; ok {
 		return decimal.Zero, err
 	}
-	return s.bidByAsset[asset.Code], nil
+	return s.avgByAsset[base.Code], nil
 }
 
 type stubIndicatorRepo struct {
@@ -148,7 +148,7 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		dailyVolume: decimal.RequireFromString("500.00"),
 	}
 	p := &stubPrice{
-		bidByAsset: map[string]decimal.Decimal{
+		avgByAsset: map[string]decimal.Decimal{
 			"MTL":     decimal.RequireFromString("8.5"),
 			"MTLRECT": decimal.RequireFromString("0.4"),
 		},
@@ -183,17 +183,17 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		got   *string
 		want  string
 	}{
-		{"I6 MTL circulation", m.MTLCirculation, "850"},        // 1000 - 150
+		{"I6 MTL circulation", m.MTLCirculation, "850"},         // 1000 - 150
 		{"I7 MTLRECT circulation", m.MTLRECTCirculation, "450"}, // 500 - 50
 		{"I24 EURMTL participants", m.EURMTLParticipants, "200"},
 		{"I40 MTLAP holders", m.MTLAPHolders, "42"},
-		{"I27 shareholders", m.MTLShareholders, "4"},                  // A,B,C,D unique
-		{"I23 median", m.MTLShareholdersMedian, "200"},                // sorted [100,150,250,300]
+		{"I27 shareholders", m.MTLShareholders, "4"},   // A,B,C,D unique
+		{"I23 median", m.MTLShareholdersMedian, "200"}, // sorted [100,150,250,300]
 		{"I11 dividends", m.MonthlyDividends, "123.45"},
 		{"I25 daily volume", m.EURMTLDailyVolume, "500"},
 		{"I26 incremental", m.EURMTL30dVolume, "12150"}, // 12000 + 500 - 350
-		{"I10 MTL bid", m.MTLMarketPrice, "8.5"},
-		{"I49 MTLRECT bid", m.MTLRECTMarketPrice, "0.4"},
+		{"I10 MTL trades-avg", m.MTLMarketPrice, "8.5"},
+		{"I49 MTLRECT trades-avg", m.MTLRECTMarketPrice, "0.4"},
 	}
 	for _, c := range checks {
 		if c.got == nil {
@@ -216,7 +216,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		dividendsErr:   map[string]error{"GFUND1": flake, "GFUND2": flake},
 		dailyVolumeErr: flake,
 	}
-	p := &stubPrice{bidErr: map[string]error{"MTL": flake, "MTLRECT": flake}}
+	p := &stubPrice{avgErr: map[string]error{"MTL": flake, "MTLRECT": flake}}
 	// Prior values cover every live indicator the service writes.
 	repo := &stubIndicatorRepo{
 		byTarget: map[string]map[int]indicator.Indicator{
@@ -266,7 +266,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 func TestEnrichMetricsNoRepoLeavesNil(t *testing.T) {
 	flake := errors.New("503")
 	h := &stubHorizon{statsErr: map[string]error{"MTL": flake}}
-	p := &stubPrice{bidErr: map[string]error{"MTL": flake}}
+	p := &stubPrice{avgErr: map[string]error{"MTL": flake}}
 
 	svc := NewService(h, p, nil, nil) // repo is nil → no fallback source
 	data := &domain.FundStructureData{}

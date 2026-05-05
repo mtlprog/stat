@@ -65,20 +65,49 @@ func (s *Service) GetPrice(ctx context.Context, asset, baseAsset domain.AssetInf
 	return result, nil
 }
 
-// GetBidPrice fetches the best bid price from the orderbook for the given asset pair.
-func (s *Service) GetBidPrice(ctx context.Context, asset, baseAsset domain.AssetInfo) (decimal.Decimal, error) {
-	ob, err := s.horizon.FetchOrderbook(ctx, asset, baseAsset, 1)
+// GetAverageTradePrice returns the arithmetic mean of executed prices over the
+// last `limit` trades on the (base, counter) pair, expressed as counter per
+// base. Replicates the legacy Python `stellar_get_trade_cost`: each trade's
+// price is normalised so that base==`base.Code` reads `n/d`, otherwise `d/n`
+// (Horizon may return either side as base depending on the trade direction).
+// Trades with d=0 or unparseable n/d are skipped. Returns ErrNoPrice if no
+// trades remain after filtering.
+func (s *Service) GetAverageTradePrice(ctx context.Context, base, counter domain.AssetInfo, limit int) (decimal.Decimal, error) {
+	trades, err := s.horizon.FetchTrades(ctx, base, counter, limit)
 	if err != nil {
-		return decimal.Zero, fmt.Errorf("fetching orderbook for bid: %w", err)
+		return decimal.Zero, fmt.Errorf("fetching trades for average: %w", err)
 	}
-	if len(ob.Bids) == 0 {
+	if len(trades) == 0 {
 		return decimal.Zero, ErrNoPrice
 	}
-	price, err := decimal.NewFromString(ob.Bids[0].Price)
-	if err != nil {
-		return decimal.Zero, fmt.Errorf("parsing bid price: %w", err)
+
+	sum := decimal.Zero
+	count := 0
+	for _, t := range trades {
+		if t.Price == nil {
+			continue
+		}
+		n, err := decimal.NewFromString(t.Price.N)
+		if err != nil {
+			continue
+		}
+		d, err := decimal.NewFromString(t.Price.D)
+		if err != nil || d.IsZero() {
+			continue
+		}
+		var p decimal.Decimal
+		if t.BaseAssetCode == base.Code {
+			p = n.Div(d)
+		} else {
+			p = d.Div(n)
+		}
+		sum = sum.Add(p)
+		count++
 	}
-	return price, nil
+	if count == 0 {
+		return decimal.Zero, ErrNoPrice
+	}
+	return sum.Div(decimal.NewFromInt(int64(count))), nil
 }
 
 // getSpotPrice queries both path finding and orderbook, returning the higher price.
