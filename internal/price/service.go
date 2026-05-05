@@ -69,9 +69,11 @@ func (s *Service) GetPrice(ctx context.Context, asset, baseAsset domain.AssetInf
 // last `limit` trades on the (base, counter) pair, expressed as counter per
 // base. Replicates the legacy Python `stellar_get_trade_cost`: each trade's
 // price is normalised so that base==`base.Code` reads `n/d`, otherwise `d/n`
-// (Horizon may return either side as base depending on the trade direction).
-// Trades with d=0 or unparseable n/d are skipped. Returns ErrNoPrice if no
-// trades remain after filtering.
+// (Horizon may return either side as base depending on the trade direction;
+// the comparison uses asset code only, matching legacy behaviour). Trades
+// where the price n/d is unparseable, d=0, or n/d is empty are skipped and
+// counted in a debug log line so a high skip rate is visible in postmortem.
+// Returns ErrNoPrice if no trades remain after filtering.
 func (s *Service) GetAverageTradePrice(ctx context.Context, base, counter domain.AssetInfo, limit int) (decimal.Decimal, error) {
 	trades, err := s.horizon.FetchTrades(ctx, base, counter, limit)
 	if err != nil {
@@ -84,9 +86,6 @@ func (s *Service) GetAverageTradePrice(ctx context.Context, base, counter domain
 	sum := decimal.Zero
 	count := 0
 	for _, t := range trades {
-		if t.Price == nil {
-			continue
-		}
 		n, err := decimal.NewFromString(t.Price.N)
 		if err != nil {
 			continue
@@ -103,6 +102,11 @@ func (s *Service) GetAverageTradePrice(ctx context.Context, base, counter domain
 		}
 		sum = sum.Add(p)
 		count++
+	}
+	if skipped := len(trades) - count; skipped > 0 {
+		slog.Debug("trades-average: skipped malformed records",
+			"base", base.Code, "counter", counter.Code,
+			"total", len(trades), "used", count, "skipped", skipped)
 	}
 	if count == 0 {
 		return decimal.Zero, ErrNoPrice

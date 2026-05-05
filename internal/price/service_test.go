@@ -256,12 +256,14 @@ func TestGetPathPriceFallbackToStrictReceive(t *testing.T) {
 }
 
 func TestGetAverageTradePriceMixedDirections(t *testing.T) {
-	// Trade 1: base=MTL, n=17, d=2  → price = 17/2  = 8.5
-	// Trade 2: base=EURMTL (inverted), n=2, d=17 → price = 17/2 = 8.5
+	// Asymmetric pair to make the inversion load-bearing for the assertion.
+	// Trade 1: base=MTL, n=17, d=2  → 17/2 = 8.5
+	// Trade 2: base=EURMTL (inverted), n=1, d=4 → d/n = 4/1 = 4
+	// Mean = (8.5 + 4) / 2 = 6.25
 	mock := &mockHorizon{
 		trades: []horizon.HorizonTrade{
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "17", D: "2"}},
-			{BaseAssetCode: "EURMTL", Price: &horizon.HorizonTradePrice{N: "2", D: "17"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "17", D: "2"}},
+			{BaseAssetCode: "EURMTL", Price: horizon.HorizonTradePrice{N: "1", D: "4"}},
 		},
 	}
 	svc := NewService(mock)
@@ -269,8 +271,8 @@ func TestGetAverageTradePriceMixedDirections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if avg.String() != "8.5" {
-		t.Errorf("avg = %s, want 8.5", avg.String())
+	if avg.String() != "6.25" {
+		t.Errorf("avg = %s, want 6.25", avg.String())
 	}
 }
 
@@ -278,9 +280,9 @@ func TestGetAverageTradePriceArithmeticMean(t *testing.T) {
 	// Three trades with same base ordering: prices 1, 2, 3 → mean = 2.
 	mock := &mockHorizon{
 		trades: []horizon.HorizonTrade{
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "1", D: "1"}},
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "2", D: "1"}},
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "3", D: "1"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "1", D: "1"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "2", D: "1"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "3", D: "1"}},
 		},
 	}
 	svc := NewService(mock)
@@ -294,13 +296,15 @@ func TestGetAverageTradePriceArithmeticMean(t *testing.T) {
 }
 
 func TestGetAverageTradePriceSkipsBadEntries(t *testing.T) {
-	// One usable trade, one with d=0, one with nil price, one with unparseable n.
+	// Two valid trades (10 and 20) plus two skipped (d=0, unparseable n).
+	// Mean must be 15 — divisor is `count` (=2), not `len(trades)` (=4).
+	// A regression to len() would yield 7.5 and fail this test.
 	mock := &mockHorizon{
 		trades: []horizon.HorizonTrade{
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "10", D: "1"}},
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "1", D: "0"}},
-			{BaseAssetCode: "MTL", Price: nil},
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "abc", D: "1"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "10", D: "1"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "1", D: "0"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "abc", D: "1"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "20", D: "1"}},
 		},
 	}
 	svc := NewService(mock)
@@ -308,8 +312,8 @@ func TestGetAverageTradePriceSkipsBadEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if avg.String() != "10" {
-		t.Errorf("avg = %s, want 10 (only one valid trade)", avg.String())
+	if avg.String() != "15" {
+		t.Errorf("avg = %s, want 15 (mean of 10 and 20, ignoring skipped)", avg.String())
 	}
 }
 
@@ -325,7 +329,7 @@ func TestGetAverageTradePriceNoTrades(t *testing.T) {
 func TestGetAverageTradePriceAllUnparseable(t *testing.T) {
 	mock := &mockHorizon{
 		trades: []horizon.HorizonTrade{
-			{BaseAssetCode: "MTL", Price: &horizon.HorizonTradePrice{N: "x", D: "y"}},
+			{BaseAssetCode: "MTL", Price: horizon.HorizonTradePrice{N: "x", D: "y"}},
 		},
 	}
 	svc := NewService(mock)

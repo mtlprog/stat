@@ -9,9 +9,10 @@ import (
 )
 
 // HorizonTradePrice is the rational n/d representation of a trade's executed
-// price. Horizon serialises both as JSON numbers, but they're integers in the
-// protocol — keep them as strings so the JSON parser doesn't lose precision
-// for very large stroop counts.
+// price. Horizon serialises `n` and `d` as JSON strings — the protocol values
+// are int64 stroop ratios that can exceed the JSON-number safe range, so the
+// API uses strings to preserve precision. Decoded as strings here and parsed
+// via decimal.NewFromString at the consumer.
 type HorizonTradePrice struct {
 	N string `json:"n"`
 	D string `json:"d"`
@@ -20,13 +21,13 @@ type HorizonTradePrice struct {
 // HorizonTrade represents a single record from /trades. Only the fields the
 // average-price calculation needs are unmarshalled.
 type HorizonTrade struct {
-	BaseAssetType    string             `json:"base_asset_type"`
-	BaseAssetCode    string             `json:"base_asset_code"`
-	BaseAssetIssuer  string             `json:"base_asset_issuer"`
-	CounterAssetType string             `json:"counter_asset_type"`
-	CounterAssetCode string             `json:"counter_asset_code"`
-	CounterIssuer    string             `json:"counter_asset_issuer"`
-	Price            *HorizonTradePrice `json:"price"`
+	BaseAssetType      string            `json:"base_asset_type"`
+	BaseAssetCode      string            `json:"base_asset_code"`
+	BaseAssetIssuer    string            `json:"base_asset_issuer"`
+	CounterAssetType   string            `json:"counter_asset_type"`
+	CounterAssetCode   string            `json:"counter_asset_code"`
+	CounterAssetIssuer string            `json:"counter_asset_issuer"`
+	Price              HorizonTradePrice `json:"price"`
 }
 
 type horizonTradesResponse struct {
