@@ -218,7 +218,7 @@ func runReport(c *cli.Context) error {
 	}
 	stage.done("date", date.Format("2006-01-02"))
 
-	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, IndicatorRepo: indicatorRepo, Slug: "mtlf"}
 	indicatorSvc := indicator.NewService(hist)
 
 	stage = startStage("indicator_calculate")
@@ -371,7 +371,7 @@ func runImport(c *cli.Context) error {
 		return nil
 	}
 
-	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, IndicatorRepo: indicatorRepo, Slug: "mtlf"}
 
 	sheetsWriter, err := export.NewSheetsWriter(ctx, cfg.GoogleSheetsSpreadsheetID, cfg.GoogleCredentialsJSON)
 	if err != nil {
@@ -654,7 +654,7 @@ func runImportExcel(c *cli.Context) error {
 
 	snapshotRepo := snapshot.NewPgRepository(pool)
 	indicatorRepo := indicator.NewPgRepository(pool)
-	hist := &indicator.HistoricalData{Repo: snapshotRepo, Slug: "mtlf"}
+	hist := &indicator.HistoricalData{Repo: snapshotRepo, IndicatorRepo: indicatorRepo, Slug: "mtlf"}
 	fullIndicatorSvc := indicator.NewService(hist)
 
 	// Iterate day by day from lastExcelDate+1 to today.

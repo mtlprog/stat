@@ -28,6 +28,7 @@ type Horizon interface {
 	FetchAssetStats(ctx context.Context, asset domain.AssetInfo) (horizon.AssetStats, error)
 	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
 	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
+	FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) ([]string, error)
 	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
 	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
 }
@@ -136,12 +137,28 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	done()
 
 	done = stage("MTL_MTLRECT_shareholders_walk")
-	if count, median, ok := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset); ok {
+	merged, count, median, shareholdersOK := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset)
+	if shareholdersOK {
 		m.MTLShareholders = ptr(decimal.NewFromInt(int64(count)).String())
 		m.MTLShareholdersMedian = ptr(median.String())
 	} else {
 		m.MTLShareholders = pickPrior(prev, 27)
 		m.MTLShareholdersMedian = pickPrior(prev, 23)
+	}
+	done()
+
+	// I18: shareholders (MTL+MTLRECT > 1) who also hold a non-zero EURMTL trustline.
+	// Reuses the merged map from the I27 walk to avoid a second MTL/MTLRECT
+	// pagination round-trip; only the EURMTL ID list is fetched here.
+	done = stage("EURMTL_shareholders_intersection")
+	if shareholdersOK {
+		if i18, ok := s.computeI18(ctx, eurmtlAsset, merged); ok {
+			m.EURMTLShareholders = ptr(decimal.NewFromInt(int64(i18)).String())
+		} else {
+			m.EURMTLShareholders = pickPrior(prev, 18)
+		}
+	} else {
+		m.EURMTLShareholders = pickPrior(prev, 18)
 	}
 	done()
 
@@ -246,11 +263,13 @@ func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) 
 }
 
 // fetchShareholderStats walks all MTL and MTLRECT holders with balance ≥1 and
-// returns the count of unique holders and the median per-holder total.
-// Each per-asset sweep gets its own step timeout so the slower side can't drag
-// the report past its overall budget; either failure aborts to ok=false and
-// the caller falls back to the prior day's persisted I27 / I23.
-func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAsset domain.AssetInfo) (int, decimal.Decimal, bool) {
+// returns the merged per-account balance map together with the count and
+// median per-holder total. The merged map is also used downstream to compute
+// I18 (intersection with EURMTL trustline holders). Each per-asset sweep gets
+// its own step timeout so the slower side can't drag the report past its
+// overall budget; either failure aborts to ok=false and the caller falls back
+// to the prior day's persisted I27 / I23 / I18.
+func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAsset domain.AssetInfo) (map[string]decimal.Decimal, int, decimal.Decimal, bool) {
 	minOne := decimal.NewFromInt(1)
 
 	mtlCtx, mtlCancel := withStepTimeout(ctx)
@@ -258,7 +277,7 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlCtx, mtlAsset, minOne)
 	if err != nil {
 		slog.Error("metrics: fetch MTL holders failed", "error", err)
-		return 0, decimal.Zero, false
+		return nil, 0, decimal.Zero, false
 	}
 
 	mtlrectCtx, mtlrectCancel := withStepTimeout(ctx)
@@ -266,7 +285,7 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlrectCtx, mtlrectAsset, minOne)
 	if err != nil {
 		slog.Error("metrics: fetch MTLRECT holders failed", "error", err)
-		return 0, decimal.Zero, false
+		return nil, 0, decimal.Zero, false
 	}
 
 	merged := make(map[string]decimal.Decimal, len(mtl)+len(mtlrect))
@@ -281,7 +300,37 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 	for _, bal := range merged {
 		values = append(values, bal)
 	}
-	return len(merged), median(values), true
+	return merged, len(merged), median(values), true
+}
+
+// computeI18 counts shareholders (MTL+MTLRECT sum > 1) who also hold an EURMTL
+// trustline with a non-zero balance. Only the EURMTL ID list is fetched here;
+// the merged shareholder balances are reused from the prior I27 walk.
+func (s *Service) computeI18(ctx context.Context, eurmtlAsset domain.AssetInfo, merged map[string]decimal.Decimal) (int, bool) {
+	stepCtx, cancel := withStepTimeout(ctx)
+	defer cancel()
+	minNonZero := decimal.New(1, -7)
+	eurmtlIDs, err := s.horizon.FetchAssetHolderIDsByBalance(stepCtx, eurmtlAsset, minNonZero)
+	if err != nil {
+		slog.Error("metrics: fetch EURMTL holder IDs failed, I18 falls back to prior", "error", err)
+		return 0, false
+	}
+
+	one := decimal.NewFromInt(1)
+	eligible := make(map[string]struct{}, len(merged))
+	for id, bal := range merged {
+		if bal.GreaterThan(one) {
+			eligible[id] = struct{}{}
+		}
+	}
+
+	count := 0
+	for _, id := range eurmtlIDs {
+		if _, ok := eligible[id]; ok {
+			count++
+		}
+	}
+	return count, true
 }
 
 // computeI11 sums monthly EURMTL dividend outflow across every fund account.

@@ -10,9 +10,9 @@ import (
 
 // TokenomicsCalculator computes tokenomics indicators (I18, I21-I27, I40)
 // from snapshot LiveMetrics + Layer1 deps. No Horizon calls — every live
-// value (I23-I27, I40) is read from data.LiveMetrics, which metrics.EnrichMetrics
-// populates upstream with sticky-fallback to the prior day on fetch failures.
-// I18 is currently a placeholder (zero) pending dividend-recipient capture.
+// value (I18, I23-I27, I40) is read from data.LiveMetrics, which
+// metrics.EnrichMetrics populates upstream with sticky-fallback to the prior
+// day on fetch failures.
 type TokenomicsCalculator struct{}
 
 func (c *TokenomicsCalculator) IDs() []int          { return []int{18, 21, 22, 23, 24, 25, 26, 27, 40} }
@@ -23,15 +23,13 @@ func (c *TokenomicsCalculator) Calculate(_ context.Context, data domain.FundStru
 	i5 := deps[5].Value // Total Shares
 
 	// All live-fetched values come straight from the snapshot.
+	i18 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.EURMTLShareholders })
 	i23 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLShareholdersMedian })
 	i24 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.EURMTLParticipants })
 	i25 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.EURMTLDailyVolume })
 	i26 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.EURMTL30dVolume })
 	i27 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLShareholders })
 	i40 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLAPHolders })
-
-	// I18: Shareholders by EURMTL — placeholder, requires dividend recipient data not yet captured.
-	i18 := decimal.Zero
 
 	// I21: Average Shareholding = I5 / I27
 	i21 := decimal.Zero
