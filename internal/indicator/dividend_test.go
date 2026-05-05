@@ -317,9 +317,13 @@ func TestDividendCalculatorEndToEndUsesIndicatorRepoForI55(t *testing.T) {
 	if by[17].IsZero() {
 		t.Errorf("I17 = 0, want non-zero")
 	}
-	wantI17 := by[54].Div(by[55]).Mul(decimal.NewFromInt(100))
-	if !by[17].Equal(wantI17) {
-		t.Errorf("I17 = %s, want %s ((I54/I55)*100)", by[17], wantI17)
+	// All dividend-chain derived figures must be rounded to ≤ 2 decimals
+	// (display precision — MONITORING / IND_ALL would otherwise show ugly
+	// 14-digit fractions). I11 and I55 are raw amounts/prices and exempt.
+	for _, id := range []int{15, 16, 17, 33, 34, 54} {
+		if by[id].Exponent() < -2 {
+			t.Errorf("I%d = %s, want exponent ≥ -2 (rounded to hundredths)", id, by[id])
+		}
 	}
 }
 

@@ -95,14 +95,19 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 		i34 = i10.Div(i54)
 	}
 
+	// Display precision: dividend-chain derived figures are rounded to two
+	// decimals so MONITORING and IND_ALL don't render 14-digit fractions like
+	// 1.26665368274671. Raw amounts (I11) and prices (I55) keep the upstream
+	// 7-decimal Stellar precision, since they're concrete asset quantities.
+	const displayPrecision = 2
 	return []Indicator{
 		NewIndicator(11, i11, "", ""),
-		NewIndicator(15, i15, "", ""),
-		NewIndicator(16, i16, "", ""),
-		NewIndicator(17, i17, "", ""),
-		NewIndicator(33, i33, "", ""),
-		NewIndicator(34, i34, "", ""),
-		NewIndicator(54, i54, "", ""),
+		NewIndicator(15, i15.Round(displayPrecision), "", ""),
+		NewIndicator(16, i16.Round(displayPrecision), "", ""),
+		NewIndicator(17, i17.Round(displayPrecision), "", ""),
+		NewIndicator(33, i33.Round(displayPrecision), "", ""),
+		NewIndicator(34, i34.Round(displayPrecision), "", ""),
+		NewIndicator(54, i54.Round(displayPrecision), "", ""),
 		NewIndicator(55, i55, "", ""),
 	}, nil
 }
