@@ -317,12 +317,16 @@ func TestDividendCalculatorEndToEndUsesIndicatorRepoForI55(t *testing.T) {
 	if by[17].IsZero() {
 		t.Errorf("I17 = 0, want non-zero")
 	}
-	// All dividend-chain derived figures must be rounded to ≤ 2 decimals
-	// (display precision — MONITORING / IND_ALL would otherwise show ugly
-	// 14-digit fractions). I11 and I55 are raw amounts/prices and exempt.
-	for _, id := range []int{15, 16, 17, 33, 34, 54} {
+	// Display precision contract: percentages/ratios at 2 decimals, per-share
+	// amounts at 4 decimals (rounding per-share to hundredths zeros them out).
+	for _, id := range []int{16, 17, 34} {
 		if by[id].Exponent() < -2 {
-			t.Errorf("I%d = %s, want exponent ≥ -2 (rounded to hundredths)", id, by[id])
+			t.Errorf("I%d = %s, want exponent ≥ -2 (ratio rounded to hundredths)", id, by[id])
+		}
+	}
+	for _, id := range []int{15, 33, 54} {
+		if by[id].Exponent() < -4 {
+			t.Errorf("I%d = %s, want exponent ≥ -4 (per-share rounded to ten-thousandths)", id, by[id])
 		}
 	}
 }
