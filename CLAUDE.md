@@ -64,6 +64,7 @@ There is no `internal/worker` package; all scheduling is external.
 ### Indicator System
 - **API reads from `fund_indicators` table, never recomputes.** `stat report` is the only writer (after `CalculateAll` succeeds). The serve path constructs no Horizon/price/fund services.
 - `fund_indicators` is heterogeneous: Layer0 dates come from `stat backfill-indicators` (JSONB-only), MONITORING-mapped IDs from `stat import-indicators-from-sheets`, daily multi-set from `stat report`. Different IDs land on different dates. `GetLatest`/`GetNearestBefore` therefore use `DISTINCT ON (indicator_id) ORDER BY snapshot_date DESC` — **do not "simplify" to `WHERE snapshot_date = MAX(...)`**, that drops every ID not present on the global max date.
+- **Snapshot vs indicator history asymmetry:** `fund_snapshots` only goes back to the snapshot rollout (~months), but `fund_indicators` carries continuous legacy-imported history back to ~2023-12-19 for IDs in `monitoringColumns`. For year-ago / multi-year lookups, chain `snapshot.Repo` → `indicator.Repo.GetNearestBefore` (single-point) or `GetHistory` (range, batched). `HistoricalData` exposes both (`Repo`, `IndicatorRepo`) for this reason.
 - `stat backfill-indicators` re-derives the strict deterministic subset (`indicator.DeterministicIDs` = I3, I4, I51–I53, I56–I61) for existing snapshots. Anything needing Horizon, LiveMetrics, or historical lookups (I24, I27, I33, I54, I55, dividend chain) cannot be honestly backfilled and is intentionally absent for pre-deploy dates.
 - Calculation is a layered DAG: `Layer0 → Layer1 → Layer2 → Dividend / Analytics / Tokenomics`.
 - Each `Calculator` declares `IDs()` and `Dependencies()`; `Registry.CalculateAll` resolves order via topological sort.
@@ -71,7 +72,7 @@ There is no `internal/worker` package; all scheduling is external.
 
 ### Snapshot Data Model
 - `fund_snapshots.data` (JSONB) stores `domain.FundStructureData` with per-account token balances and prices.
-- Token prices captured at snapshot time live in `FundAccountPortfolio.Tokens[].PriceInEURMTL` — use these for historical price lookups (see `findBTCPrice` in `layer0.go` as a pattern).
+- Token prices captured at snapshot time live in `FundAccountPortfolio.Tokens[].PriceInEURMTL` — use these for historical price lookups of assets the fund **holds** (see `findBTCPrice` in `layer0.go`). Caveat: the fund does **not** hold its own issued MTL or MTLRECT, so token-scan lookups for those always come back empty — fall back to `indicator.Repo` for I10 / I49 history instead.
 - `snapshot.Repository.GetByDate` requires exact date match (midnight UTC); snapshots are stored by `stat report` using `time.Date(..., time.UTC)`.
 
 ### Google Sheets Export
@@ -126,9 +127,9 @@ path = u.Path + "?" + u.RawQuery
 
 ### Error Handling
 - Horizon pagination errors must be returned, not swallowed — silent `break` on parse failure hides incomplete data.
-- Balance parse errors in helpers should `slog.Warn` before returning zero — distinguish "not found" from "corrupt data".
+- Use **Debug / Info / Error only** — never `slog.Warn`. Warn is ambiguous; ops can't tell whether to act. Map: Debug = noisy diagnostic; Info = "happened, FYI" (data absence noted, system continues); Error = needs intervention or propagate as a returned error so the caller fails loud. Balance/parse errors that mask data → Error; cascade visibility for an already-logged Error → Info.
 - When one failed API call cascades to zero out multiple indicators, log the cascade explicitly (which indicators are affected and why).
-- Always distinguish `snapshot.ErrNotFound` from real DB errors using `errors.Is(err, snapshot.ErrNotFound)` — never conflate "not found" with connection/query failures (see `runImport` pattern).
+- Always distinguish `snapshot.ErrNotFound` from real DB errors using `errors.Is(err, snapshot.ErrNotFound)` — never conflate "not found" with connection/query failures (see `runImport` pattern). Real DB errors must **propagate up** through the calculator's error return, not silently fall back to an alternate source — that would mask infrastructure outages as data absence.
 - Long loops over dates/snapshots must have a circuit breaker (`maxConsecutiveErrors = 5`) to abort on persistent failures — never silently iterate through hundreds of errors.
 
 ## Local Development with Docker
@@ -139,6 +140,7 @@ path = u.Path + "?" + u.RawQuery
 - Dockerfile ENTRYPOINT is `./stat`, CMD is `serve` — to run subcommands use `--entrypoint "./stat" app <subcommand>`.
 - `docker compose up -d db` starts just PostgreSQL; `docker compose run --rm` for one-shot commands.
 - For `import-excel` with a local file: `docker compose run --rm -v "$(pwd)/MTL_report_1.xlsx:/app/MTL_report_1.xlsx" --entrypoint "./stat" app import-excel --file MTL_report_1.xlsx`
+- Read-only prod-DB audit (fish-friendly): `dotenv run -- bash -c 'psql "$DATABASE_URL" -c "SELECT …"'`. Plain `dotenv run -- psql "$DATABASE_URL"` fails because fish interpolates `$DATABASE_URL` before dotenv loads it — wrap in `bash -c '…'` to defer expansion.
 
 ### Excel Import (`import-excel`)
 - Uses `github.com/xuri/excelize/v2` to read the MONITORING sheet from an `.xlsx` file.
