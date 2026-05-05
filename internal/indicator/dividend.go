@@ -95,19 +95,25 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 		i34 = i10.Div(i54)
 	}
 
-	// Display precision: dividend-chain derived figures are rounded to two
-	// decimals so MONITORING and IND_ALL don't render 14-digit fractions like
-	// 1.26665368274671. Raw amounts (I11) and prices (I55) keep the upstream
-	// 7-decimal Stellar precision, since they're concrete asset quantities.
-	const displayPrecision = 2
+	// Display precision split:
+	//   - Percentages and large ratios (I16, I17, I34) → 2 decimals: avoids
+	//     14-digit fractions in MONITORING / IND_ALL.
+	//   - Per-share amounts (I15, I33, I54) → 4 decimals: dividend per share
+	//     is ~0.004 EURMTL — rounding to hundredths zeroes out the signal.
+	// Raw amounts (I11) and prices (I55) keep the upstream 7-decimal Stellar
+	// precision, since they're concrete asset quantities.
+	const (
+		ratioPrecision    = 2
+		perSharePrecision = 4
+	)
 	return []Indicator{
 		NewIndicator(11, i11, "", ""),
-		NewIndicator(15, i15.Round(displayPrecision), "", ""),
-		NewIndicator(16, i16.Round(displayPrecision), "", ""),
-		NewIndicator(17, i17.Round(displayPrecision), "", ""),
-		NewIndicator(33, i33.Round(displayPrecision), "", ""),
-		NewIndicator(34, i34.Round(displayPrecision), "", ""),
-		NewIndicator(54, i54.Round(displayPrecision), "", ""),
+		NewIndicator(15, i15.Round(perSharePrecision), "", ""),
+		NewIndicator(16, i16.Round(ratioPrecision), "", ""),
+		NewIndicator(17, i17.Round(ratioPrecision), "", ""),
+		NewIndicator(33, i33.Round(perSharePrecision), "", ""),
+		NewIndicator(34, i34.Round(ratioPrecision), "", ""),
+		NewIndicator(54, i54.Round(perSharePrecision), "", ""),
 		NewIndicator(55, i55, "", ""),
 	}, nil
 }
