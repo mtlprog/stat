@@ -73,7 +73,9 @@ func (s *Service) GetPrice(ctx context.Context, asset, baseAsset domain.AssetInf
 // the comparison uses asset code only, matching legacy behaviour). Trades
 // where the price n/d is unparseable, d=0, or n/d is empty are skipped and
 // counted in a debug log line so a high skip rate is visible in postmortem.
-// Returns ErrNoPrice if no trades remain after filtering.
+// Returns ErrNoPrice if no trades remain after filtering. The result is
+// rounded to 7 decimal places (Stellar's stroop precision, half-away-from-zero)
+// — matches how Horizon reports orderbook bid/ask prices.
 func (s *Service) GetAverageTradePrice(ctx context.Context, base, counter domain.AssetInfo, limit int) (decimal.Decimal, error) {
 	trades, err := s.horizon.FetchTrades(ctx, base, counter, limit)
 	if err != nil {
@@ -111,8 +113,13 @@ func (s *Service) GetAverageTradePrice(ctx context.Context, base, counter domain
 	if count == 0 {
 		return decimal.Zero, ErrNoPrice
 	}
-	return sum.Div(decimal.NewFromInt(int64(count))), nil
+	return sum.Div(decimal.NewFromInt(int64(count))).Round(stellarPrecision), nil
 }
+
+// stellarPrecision is the maximum number of decimal places used by the Stellar
+// protocol — 1 stroop = 10^-7 of an asset unit. All amounts and prices are
+// expressed at most to this precision; rounding is half-away-from-zero.
+const stellarPrecision = 7
 
 // getSpotPrice queries both path finding and orderbook, returning the higher price.
 func (s *Service) getSpotPrice(ctx context.Context, asset, baseAsset domain.AssetInfo) (domain.TokenPairPrice, error) {
