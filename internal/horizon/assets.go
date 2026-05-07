@@ -60,14 +60,14 @@ type HorizonAssetBalances struct {
 
 // HorizonAsset represents an asset from the Horizon /assets endpoint.
 type HorizonAsset struct {
-	AssetType                string               `json:"asset_type"`
-	AssetCode                string               `json:"asset_code"`
-	AssetIssuer              string               `json:"asset_issuer"`
-	Accounts                 HorizonAssetAccounts `json:"accounts"`
-	Balances                 HorizonAssetBalances `json:"balances"`
-	ClaimableBalancesAmount  string               `json:"claimable_balances_amount"`
-	LiquidityPoolsAmount     string               `json:"liquidity_pools_amount"`
-	ContractsAmount          string               `json:"contracts_amount"`
+	AssetType               string               `json:"asset_type"`
+	AssetCode               string               `json:"asset_code"`
+	AssetIssuer             string               `json:"asset_issuer"`
+	Accounts                HorizonAssetAccounts `json:"accounts"`
+	Balances                HorizonAssetBalances `json:"balances"`
+	ClaimableBalancesAmount string               `json:"claimable_balances_amount"`
+	LiquidityPoolsAmount    string               `json:"liquidity_pools_amount"`
+	ContractsAmount         string               `json:"contracts_amount"`
 }
 
 // accountBalanceForAsset returns the balance of the specified asset on an

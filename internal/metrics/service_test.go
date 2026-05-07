@@ -11,6 +11,7 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 	"github.com/mtlprog/stat/internal/horizon"
 	"github.com/mtlprog/stat/internal/indicator"
+	"github.com/mtlprog/stat/internal/stellarexpert"
 )
 
 // --- mocks ---
@@ -26,9 +27,16 @@ type stubHorizon struct {
 	holderIDsErr    map[string]error
 	dividends       map[string]decimal.Decimal // by account address
 	dividendsErr    map[string]error
-	dailyVolume     decimal.Decimal
-	dailyVolumeErr  error
 	dividendsCalled int
+}
+
+type stubExpert struct {
+	stats stellarexpert.Stats
+	err   error
+}
+
+func (s *stubExpert) FetchEURMTLPaymentStats(_ context.Context, _ time.Time) (stellarexpert.Stats, error) {
+	return s.stats, s.err
 }
 
 func (s *stubHorizon) FetchAssetHolderCountByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) (int, error) {
@@ -71,10 +79,6 @@ func (s *stubHorizon) FetchMonthlyEURMTLOutflow(_ context.Context, accountID str
 		return v, nil
 	}
 	return decimal.Zero, nil
-}
-
-func (s *stubHorizon) FetchEURMTLPaymentVolume(_ context.Context, _ time.Time) (decimal.Decimal, error) {
-	return s.dailyVolume, s.dailyVolumeErr
 }
 
 type stubPrice struct {
@@ -137,13 +141,15 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		},
 		holderCounts: map[string]int{
 			"EURMTL": 200,
-			"MTLAP":  42,
 		},
 		holderBalances: map[string]map[string]decimal.Decimal{
+			// Includes a sub-1 balance (E) so we can also exercise the I62/I27
+			// threshold split: I62 counts {A,B,C,D,E}, I27 counts only {A,B,C,D}.
 			"MTL": {
 				"A": decimal.NewFromInt(100),
 				"B": decimal.NewFromInt(200),
 				"C": decimal.NewFromInt(300),
+				"E": decimal.RequireFromString("0.5"),
 			},
 			"MTLRECT": {
 				"B": decimal.NewFromInt(50),
@@ -159,7 +165,6 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 			"GFUND1": decimal.RequireFromString("100"),
 			"GFUND2": decimal.RequireFromString("23.45"),
 		},
-		dailyVolume: decimal.RequireFromString("500.00"),
 	}
 	p := &stubPrice{
 		avgByAsset: map[string]decimal.Decimal{
@@ -167,21 +172,15 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 			"MTLRECT": decimal.RequireFromString("0.4"),
 		},
 	}
-	repo := &stubIndicatorRepo{
-		byTarget: map[string]map[int]indicator.Indicator{
-			// Yesterday (used for I26_yesterday): I26 = 12000, I25 = 400.
-			date.AddDate(0, 0, -1).Format("2006-01-02"): indicatorMap(map[int]string{
-				26: "12000",
-				25: "400",
-			}),
-			// 30 days ago (I25_(today-30)): I25 = 350.
-			date.AddDate(0, 0, -30).Format("2006-01-02"): indicatorMap(map[int]string{
-				25: "350",
-			}),
+	expert := &stubExpert{
+		stats: stellarexpert.Stats{
+			Daily:      decimal.RequireFromString("500"),
+			Cumulative: decimal.RequireFromString("12500"),
 		},
 	}
+	repo := &stubIndicatorRepo{}
 
-	svc := NewService(h, p, repo, []string{"GFUND1", "GFUND2"})
+	svc := NewService(h, p, expert, repo, []string{"GFUND1", "GFUND2"})
 	data := &domain.FundStructureData{}
 
 	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
@@ -200,13 +199,13 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		{"I6 MTL circulation", m.MTLCirculation, "850"},         // 1000 - 150
 		{"I7 MTLRECT circulation", m.MTLRECTCirculation, "450"}, // 500 - 50
 		{"I24 EURMTL participants", m.EURMTLParticipants, "200"},
-		{"I40 MTLAP holders", m.MTLAPHolders, "42"},
-		{"I27 shareholders", m.MTLShareholders, "4"},           // A,B,C,D unique
+		{"I27 shareholders ≥1", m.MTLShareholders, "4"},        // A,B,C,D — E (0.5) excluded
+		{"I62 shareholders any", m.MTLShareholdersAny, "5"},    // A,B,C,D,E all counted
 		{"I23 median", m.MTLShareholdersMedian, "200"},         // sorted [100,150,250,300]
 		{"I18 EURMTL shareholders", m.EURMTLShareholders, "2"}, // {A,B,C,D} ∩ {A,C,X,Y} = {A,C}
 		{"I11 dividends", m.MonthlyDividends, "123.45"},
 		{"I25 daily volume", m.EURMTLDailyVolume, "500"},
-		{"I26 incremental", m.EURMTL30dVolume, "12150"}, // 12000 + 500 - 350
+		{"I26 cumulative", m.EURMTLPaymentTotal, "12500"}, // 12000 + 500
 		{"I10 MTL trades-avg", m.MTLMarketPrice, "8.5"},
 		{"I49 MTLRECT trades-avg", m.MTLRECTMarketPrice, "0.4"},
 	}
@@ -226,24 +225,24 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 	flake := errors.New("503 service unavailable")
 	h := &stubHorizon{
 		statsErr:       map[string]error{"MTL": flake, "MTLRECT": flake},
-		holderCountErr: map[string]error{"EURMTL": flake, "MTLAP": flake},
+		holderCountErr: map[string]error{"EURMTL": flake},
 		holderErr:      map[string]error{"MTL": flake, "MTLRECT": flake},
 		holderIDsErr:   map[string]error{"EURMTL": flake},
 		dividendsErr:   map[string]error{"GFUND1": flake, "GFUND2": flake},
-		dailyVolumeErr: flake,
 	}
 	p := &stubPrice{avgErr: map[string]error{"MTL": flake, "MTLRECT": flake}}
+	expert := &stubExpert{err: flake}
 	// Prior values cover every live indicator the service writes.
 	repo := &stubIndicatorRepo{
 		byTarget: map[string]map[int]indicator.Indicator{
 			"latest": indicatorMap(map[int]string{
 				6: "777", 7: "333", 10: "9.1", 11: "100", 18: "120", 23: "55", 24: "180",
-				25: "410", 26: "11500", 27: "5", 40: "33", 49: "0.7",
+				25: "410", 26: "11500", 27: "5", 49: "0.7", 62: "9",
 			}),
 		},
 	}
 
-	svc := NewService(h, p, repo, nil)
+	svc := NewService(h, p, expert, repo, nil)
 	data := &domain.FundStructureData{}
 
 	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
@@ -264,10 +263,10 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		"I23": {m.MTLShareholdersMedian, "55"},
 		"I24": {m.EURMTLParticipants, "180"},
 		"I25": {m.EURMTLDailyVolume, "410"},
-		"I26": {m.EURMTL30dVolume, "11500"},
+		"I26": {m.EURMTLPaymentTotal, "11500"},
 		"I27": {m.MTLShareholders, "5"},
-		"I40": {m.MTLAPHolders, "33"},
 		"I49": {m.MTLRECTMarketPrice, "0.7"},
+		"I62": {m.MTLShareholdersAny, "9"},
 	}
 	for id, c := range checks {
 		if c.got == nil {
@@ -284,8 +283,9 @@ func TestEnrichMetricsNoRepoLeavesNil(t *testing.T) {
 	flake := errors.New("503")
 	h := &stubHorizon{statsErr: map[string]error{"MTL": flake}}
 	p := &stubPrice{avgErr: map[string]error{"MTL": flake}}
+	expert := &stubExpert{err: flake}
 
-	svc := NewService(h, p, nil, nil) // repo is nil → no fallback source
+	svc := NewService(h, p, expert, nil, nil) // repo is nil → no fallback source
 	data := &domain.FundStructureData{}
 
 	if err := svc.EnrichMetrics(context.Background(), time.Now(), data); err != nil {
@@ -296,53 +296,29 @@ func TestEnrichMetricsNoRepoLeavesNil(t *testing.T) {
 	}
 }
 
-func TestComputeI26FallsBackWhenDailyMissing(t *testing.T) {
+// stellar.expert hasn't ingested the requested date yet → ErrNoDailyEntry
+// must collapse to sticky-fallback, NOT propagate as an error.
+func TestEnrichMetricsExpertNoDailyEntryUsesPrior(t *testing.T) {
 	date := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+	h := &stubHorizon{}
+	p := &stubPrice{}
+	expert := &stubExpert{err: stellarexpert.ErrNoDailyEntry}
 	repo := &stubIndicatorRepo{
 		byTarget: map[string]map[int]indicator.Indicator{
-			"latest": indicatorMap(map[int]string{26: "9000"}),
+			"latest": indicatorMap(map[int]string{25: "410", 26: "11500"}),
 		},
 	}
-	svc := NewService(&stubHorizon{}, &stubPrice{}, repo, nil)
-	prev := repo.byTarget["latest"]
 
-	got := svc.computeI26(context.Background(), date, decimal.Zero, false /* dailyOK */, prev)
-	if got == nil || *got != "9000" {
-		t.Errorf("computeI26 = %v, want 9000 (fallback to prior I26)", got)
+	svc := NewService(h, p, expert, repo, nil)
+	data := &domain.FundStructureData{}
+	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-func TestComputeI26FallsBackWhen30dMissing(t *testing.T) {
-	date := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
-	// Repo has yesterday's I26 but no I25 from 30 days ago.
-	repo := &stubIndicatorRepo{
-		byTarget: map[string]map[int]indicator.Indicator{
-			"latest": indicatorMap(map[int]string{26: "9000"}),
-		},
+	if data.LiveMetrics.EURMTLDailyVolume == nil || *data.LiveMetrics.EURMTLDailyVolume != "410" {
+		t.Errorf("I25 = %v, want 410 (sticky)", data.LiveMetrics.EURMTLDailyVolume)
 	}
-	svc := NewService(&stubHorizon{}, &stubPrice{}, repo, nil)
-	prev := repo.byTarget["latest"]
-
-	got := svc.computeI26(context.Background(), date, decimal.NewFromInt(500), true, prev)
-	if got == nil || *got != "9000" {
-		t.Errorf("computeI26 = %v, want 9000 (fallback when 30d-old I25 absent)", got)
-	}
-}
-
-func TestComputeI26ClampsNegativeToZero(t *testing.T) {
-	date := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
-	// 30d-ago I25 enormous → arithmetic goes negative → clamp to 0.
-	repo := &stubIndicatorRepo{
-		byTarget: map[string]map[int]indicator.Indicator{
-			date.AddDate(0, 0, -30).Format("2006-01-02"): indicatorMap(map[int]string{25: "100000"}),
-		},
-	}
-	svc := NewService(&stubHorizon{}, &stubPrice{}, repo, nil)
-	prev := indicatorMap(map[int]string{26: "1000"})
-
-	got := svc.computeI26(context.Background(), date, decimal.NewFromInt(50), true, prev)
-	if got == nil || *got != "0" {
-		t.Errorf("computeI26 = %v, want 0 (negative clamped)", got)
+	if data.LiveMetrics.EURMTLPaymentTotal == nil || *data.LiveMetrics.EURMTLPaymentTotal != "11500" {
+		t.Errorf("I26 = %v, want 11500 (sticky)", data.LiveMetrics.EURMTLPaymentTotal)
 	}
 }
 
@@ -384,7 +360,7 @@ func TestComputeI11StickyWhenLiveSumIsZero(t *testing.T) {
 			"latest": indicatorMap(map[int]string{11: "2440.7"}),
 		},
 	}
-	svc := NewService(h, &stubPrice{}, repo, []string{"GFUND1", "GFUND2", "GFUND3"})
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, repo, []string{"GFUND1", "GFUND2", "GFUND3"})
 
 	got := svc.computeI11(context.Background(), repo.byTarget["latest"])
 	if got == nil || *got != "2440.7" {
@@ -399,7 +375,7 @@ func TestComputeI11StickyWhenLiveSumIsZero(t *testing.T) {
 // (or prior is missing entirely). The downstream calculator needs a definite
 // value, not a sticky from nothing.
 func TestComputeI11WritesZeroWhenPriorIsAlsoZero(t *testing.T) {
-	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubIndicatorRepo{}, []string{"GFUND1"})
+	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubExpert{}, &stubIndicatorRepo{}, []string{"GFUND1"})
 	got := svc.computeI11(context.Background(), indicatorMap(map[int]string{11: "0"}))
 	if got == nil || *got != "0" {
 		t.Errorf("computeI11 = %v, want \"0\" (live zero, prior zero)", got)
@@ -424,7 +400,7 @@ func TestEnrichMetricsI18StickyOnEURMTLHoldersFailure(t *testing.T) {
 			"latest": indicatorMap(map[int]string{18: "347"}),
 		},
 	}
-	svc := NewService(h, &stubPrice{}, repo, nil)
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, repo, nil)
 	data := &domain.FundStructureData{}
 
 	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
@@ -445,7 +421,7 @@ func TestComputeI18EmptyMerged(t *testing.T) {
 	h := &stubHorizon{
 		holderIDs: map[string][]string{"EURMTL": {"A", "B", "C"}},
 	}
-	svc := NewService(h, &stubPrice{}, nil, nil)
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 	got, ok := svc.computeI18(context.Background(), domain.EURMTLAsset(), nil)
 	if !ok {
 		t.Fatal("computeI18(nil merged) ok=false, want true")
@@ -469,7 +445,7 @@ func TestComputeI18FiltersSumGreaterThanOne(t *testing.T) {
 			"EURMTL": {"A", "B", "C", "D", "Z"},
 		},
 	}
-	svc := NewService(h, &stubPrice{}, nil, nil)
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 	got, ok := svc.computeI18(context.Background(), domain.EURMTLAsset(), merged)
 	if !ok {
 		t.Fatal("computeI18 ok=false, want true")
@@ -480,7 +456,7 @@ func TestComputeI18FiltersSumGreaterThanOne(t *testing.T) {
 }
 
 func TestComputeI11WritesZeroWhenNoPrior(t *testing.T) {
-	svc := NewService(&stubHorizon{}, &stubPrice{}, nil, []string{"GFUND1"})
+	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubExpert{}, nil, []string{"GFUND1"})
 	got := svc.computeI11(context.Background(), nil)
 	if got == nil || *got != "0" {
 		t.Errorf("computeI11 = %v, want \"0\" (no prior available)", got)

@@ -42,6 +42,7 @@ import (
 	"github.com/mtlprog/stat/internal/portfolio"
 	"github.com/mtlprog/stat/internal/price"
 	"github.com/mtlprog/stat/internal/snapshot"
+	"github.com/mtlprog/stat/internal/stellarexpert"
 	"github.com/mtlprog/stat/internal/valuation"
 	"github.com/mtlprog/stat/migrations"
 )
@@ -201,7 +202,8 @@ func runReport(c *cli.Context) error {
 	for _, a := range domain.AccountRegistry() {
 		fundAddrs = append(fundAddrs, a.Address)
 	}
-	metricsSvc := metrics.NewService(horizonClient, priceSvc, indicatorRepo, fundAddrs)
+	expertClient := stellarexpert.NewClient(cfg.StellarExpertURL)
+	metricsSvc := metrics.NewService(horizonClient, priceSvc, expertClient, indicatorRepo, fundAddrs)
 	snapshotSvc := snapshot.NewService(fundSvc, snapshotRepo, metricsSvc)
 
 	if _, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics"); err != nil {
@@ -841,13 +843,13 @@ func parseExcelNumber(s string) any {
 // parseExcelDate parses date strings in formats used by excelize output.
 func parseExcelDate(s string) (time.Time, error) {
 	for _, layout := range []string{
-		"02.01.2006",     // dd.mm.yyyy — known MONITORING format
-		"2006-01-02",     // ISO
+		"02.01.2006", // dd.mm.yyyy — known MONITORING format
+		"2006-01-02", // ISO
 		"2006-01-02T15:04:05Z",
-		"01-02-06",       // MM-DD-YY
-		"1/2/06",         // US short
-		"1/2/2006",       // US long
-		"01-02-2006",     // MM-DD-YYYY
+		"01-02-06",   // MM-DD-YY
+		"1/2/06",     // US short
+		"1/2/2006",   // US long
+		"01-02-2006", // MM-DD-YYYY
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil

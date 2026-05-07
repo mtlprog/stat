@@ -19,7 +19,7 @@ func TestBuildMonitoringRows(t *testing.T) {
 		{Indicator: indicator.Indicator{ID: 5, Value: decimal.NewFromFloat(639256.44)}},
 		{Indicator: indicator.Indicator{ID: 10, Value: decimal.NewFromFloat(6.29)}},
 		{Indicator: indicator.Indicator{ID: 11, Value: decimal.NewFromFloat(4434.70)}},
-		{Indicator: indicator.Indicator{ID: 40, Value: decimal.NewFromFloat(205.0)}},
+		{Indicator: indicator.Indicator{ID: 62, Value: decimal.NewFromFloat(310.0)}},
 	}
 
 	headerRows, dataRow := buildMonitoringRows(rows, at)
@@ -32,26 +32,26 @@ func TestBuildMonitoringRows(t *testing.T) {
 	colNumRow := headerRows[0]
 	headerRow := headerRows[1]
 
-	// 41 columns: Date + 40 data columns
-	if len(colNumRow) != 41 {
-		t.Errorf("col num row: expected 41 columns, got %d", len(colNumRow))
+	// 42 columns: Date + 41 data columns
+	if len(colNumRow) != 42 {
+		t.Errorf("col num row: expected 42 columns, got %d", len(colNumRow))
 	}
-	if len(headerRow) != 41 {
-		t.Errorf("header row: expected 41 columns, got %d", len(headerRow))
+	if len(headerRow) != 42 {
+		t.Errorf("header row: expected 42 columns, got %d", len(headerRow))
 	}
-	if len(dataRow) != 41 {
-		t.Errorf("data row: expected 41 columns, got %d", len(dataRow))
+	if len(dataRow) != 42 {
+		t.Errorf("data row: expected 42 columns, got %d", len(dataRow))
 	}
 
-	// Row 1: column A is blank, then 1.0..40.0
+	// Row 1: column A is blank, then 1.0..41.0
 	if colNumRow[0] != "" {
 		t.Errorf("col num row[0]: expected empty, got %v", colNumRow[0])
 	}
 	if colNumRow[1] != 1.0 {
 		t.Errorf("col num row[1]: expected 1.0, got %v", colNumRow[1])
 	}
-	if colNumRow[40] != 40.0 {
-		t.Errorf("col num row[40]: expected 40.0, got %v", colNumRow[40])
+	if colNumRow[41] != 41.0 {
+		t.Errorf("col num row[41]: expected 41.0, got %v", colNumRow[41])
 	}
 
 	// Row 2: header names
@@ -61,8 +61,8 @@ func TestBuildMonitoringRows(t *testing.T) {
 	if headerRow[1] != "Market Cap EUR" {
 		t.Errorf("header row[1]: expected 'Market Cap EUR', got %v", headerRow[1])
 	}
-	if headerRow[40] != "MTLAP" {
-		t.Errorf("header row[40]: expected 'MTLAP', got %v", headerRow[40])
+	if headerRow[41] != "Shareholders" {
+		t.Errorf("header row[41]: expected 'Shareholders', got %v", headerRow[41])
 	}
 
 	// Date column
@@ -103,14 +103,19 @@ func TestBuildMonitoringRows(t *testing.T) {
 		t.Errorf("data row missing I4: expected nil, got %v (%T)", dataRow[4], dataRow[4])
 	}
 
-	// MTLAP (index 40) — last column
-	if v, ok := dataRow[40].(float64); !ok || v != 205.0 {
-		t.Errorf("data row MTLAP: expected 205.0, got %v", dataRow[40])
+	// MTLAP slot (index 40) — deprecated, indicatorID=0, expect nil
+	if dataRow[40] != nil {
+		t.Errorf("data row MTLAP (deprecated I40 slot): expected nil, got %v", dataRow[40])
+	}
+
+	// Shareholders / I62 (index 41) — last column
+	if v, ok := dataRow[41].(float64); !ok || v != 310.0 {
+		t.Errorf("data row Shareholders: expected 310.0, got %v", dataRow[41])
 	}
 }
 
 func TestMonitoringColumnCount(t *testing.T) {
-	if len(monitoringColumns) != 40 {
-		t.Errorf("expected 40 monitoring columns, got %d", len(monitoringColumns))
+	if len(monitoringColumns) != 41 {
+		t.Errorf("expected 41 monitoring columns, got %d", len(monitoringColumns))
 	}
 }

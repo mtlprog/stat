@@ -215,8 +215,8 @@ func (w *SheetsWriter) ensureSheets(ctx context.Context, names ...string) (map[s
 // Styling matches the original MTL_report_1.xlsx layout.
 func (w *SheetsWriter) applyFormatting(ctx context.Context, indAll, indMain sheetMeta, rows []IndicatorRow) error {
 	lightGreen := &sheets.Color{Red: 0.851, Green: 0.918, Blue: 0.827} // #D9EAD3
-	lightYellow := &sheets.Color{Red: 1.0, Green: 0.898, Blue: 0.6}   // #FFE599
-	lightGray := &sheets.Color{Red: 0.851, Green: 0.851, Blue: 0.851} // #D9D9D9
+	lightYellow := &sheets.Color{Red: 1.0, Green: 0.898, Blue: 0.6}    // #FFE599
+	lightGray := &sheets.Color{Red: 0.851, Green: 0.851, Blue: 0.851}  // #D9D9D9
 
 	allIDs := make([]int, len(rows))
 	for i, r := range rows {
