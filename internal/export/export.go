@@ -157,7 +157,11 @@ func (s *Service) exportRows(ctx context.Context, current []indicator.Indicator,
 	return rows, nil
 }
 
-// computeChange returns (current - historical) / historical, or nil if unavailable.
+// computeChange returns (current - historical) / historical, or nil if
+// unavailable. Rounded to 4 decimals so the ratio renders cleanly under the
+// 0.00% / 0% number formats used in IND_ALL and IND_MAIN — without rounding,
+// shopspring's 16-digit division output would leak into the API JSON
+// (which serializes the Decimal as a string at full precision).
 func computeChange(id int, current decimal.Decimal, byID map[int]indicator.Indicator) *decimal.Decimal {
 	if byID == nil {
 		return nil
@@ -166,6 +170,6 @@ func computeChange(id int, current decimal.Decimal, byID map[int]indicator.Indic
 	if !ok || hist.Value.IsZero() {
 		return nil
 	}
-	pct := current.Sub(hist.Value).Div(hist.Value)
+	pct := current.Sub(hist.Value).Div(hist.Value).Round(4)
 	return &pct
 }

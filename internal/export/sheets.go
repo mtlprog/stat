@@ -3,12 +3,15 @@ package export
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	sheets "google.golang.org/api/sheets/v4"
+
+	"github.com/mtlprog/stat/internal/indicator"
 )
 
 // SheetsWriter implements SheetWriter using the Google Sheets API.
@@ -69,13 +72,6 @@ func (w *SheetsWriter) Write(ctx context.Context, rows []IndicatorRow) error {
 	indAllValues := buildIndAll(rows)
 	indMainValues := buildIndMain(rows, now)
 
-	mainCount := 0
-	for _, r := range rows {
-		if r.IsMain {
-			mainCount++
-		}
-	}
-
 	_, err = w.svc.Spreadsheets.Values.BatchClear(
 		w.spreadsheetID,
 		&sheets.BatchClearValuesRequest{
@@ -100,7 +96,7 @@ func (w *SheetsWriter) Write(ctx context.Context, rows []IndicatorRow) error {
 		return fmt.Errorf("writing sheets: %w", err)
 	}
 
-	if err := w.applyFormatting(ctx, meta["IND_ALL"], meta["IND_MAIN"], len(rows), mainCount); err != nil {
+	if err := w.applyFormatting(ctx, meta["IND_ALL"], meta["IND_MAIN"], rows); err != nil {
 		return fmt.Errorf("applying formatting: %w", err)
 	}
 
@@ -217,14 +213,27 @@ func (w *SheetsWriter) ensureSheets(ctx context.Context, names ...string) (map[s
 
 // applyFormatting applies visual formatting to both sheets via a single BatchUpdate.
 // Styling matches the original MTL_report_1.xlsx layout.
-func (w *SheetsWriter) applyFormatting(ctx context.Context, indAll, indMain sheetMeta, allCount, mainCount int) error {
+func (w *SheetsWriter) applyFormatting(ctx context.Context, indAll, indMain sheetMeta, rows []IndicatorRow) error {
 	lightGreen := &sheets.Color{Red: 0.851, Green: 0.918, Blue: 0.827} // #D9EAD3
 	lightYellow := &sheets.Color{Red: 1.0, Green: 0.898, Blue: 0.6}   // #FFE599
 	lightGray := &sheets.Color{Red: 0.851, Green: 0.851, Blue: 0.851} // #D9D9D9
 
+	allIDs := make([]int, len(rows))
+	for i, r := range rows {
+		allIDs[i] = r.ID
+	}
+	var mainIDs []int
+	for _, r := range rows {
+		if r.IsMain {
+			mainIDs = append(mainIDs, r.ID)
+		}
+	}
+
 	var reqs []*sheets.Request
 
 	// ---- IND_ALL ----
+	allCount := len(rows)
+	mainCount := len(mainIDs)
 	allEnd := int64(allCount + 1)
 
 	// Header row: light green background, bold Arial 10pt, centered
@@ -244,13 +253,12 @@ func (w *SheetsWriter) applyFormatting(ctx context.Context, indAll, indMain shee
 	// Freeze 1 row + 12 columns (pane at M2)
 	reqs = append(reqs, freezePaneReq(indAll.id, 1, 12))
 
-	// Value column D (col 3): #,##0, bold
+	// Value column D (col 3): bold across all rows; number format per indicator
+	// precision (grouped by consecutive same-precision runs).
 	reqs = append(reqs, cellFormatReq(indAll.id, 1, allEnd, 3, 4,
-		&sheets.CellFormat{
-			NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0"},
-			TextFormat:   &sheets.TextFormat{Bold: true},
-		},
-		"userEnteredFormat(numberFormat,textFormat)"))
+		&sheets.CellFormat{TextFormat: &sheets.TextFormat{Bold: true}},
+		"userEnteredFormat.textFormat"))
+	reqs = append(reqs, valueFormatReqs(indAll.id, 3, 1, allIDs)...)
 
 	// Code column C (col 2) and measure column E (col 4): centered
 	reqs = append(reqs, cellFormatReq(indAll.id, 1, allEnd, 2, 3,
@@ -322,14 +330,15 @@ func (w *SheetsWriter) applyFormatting(ctx context.Context, indAll, indMain shee
 		},
 		"userEnteredFormat(horizontalAlignment,verticalAlignment)"))
 
-	// Data column B (col 1): font 12pt bold, v=center, #,##0.00
+	// Data column B (col 1): font 12pt bold, v=center across all rows;
+	// number format per indicator precision (grouped by consecutive runs).
 	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 1, 2,
 		&sheets.CellFormat{
 			TextFormat:        &sheets.TextFormat{Bold: true, FontSize: 12},
 			VerticalAlignment: "MIDDLE",
-			NumberFormat:      &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0.00"},
 		},
-		"userEnteredFormat(textFormat,verticalAlignment,numberFormat)"))
+		"userEnteredFormat(textFormat,verticalAlignment)"))
+	reqs = append(reqs, valueFormatReqs(indMain.id, 1, 2, mainIDs)...)
 
 	// Data column C (col 2): centered, v=center
 	reqs = append(reqs, cellFormatReq(indMain.id, 2, mainEnd, 2, 3,
@@ -401,6 +410,47 @@ func freezePaneReq(sheetID, rows, cols int64) *sheets.Request {
 			Fields: "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
 		},
 	}
+}
+
+// numberFormatPattern returns the Sheets pattern for a given decimal precision:
+// 0 → "#,##0", 2 → "#,##0.00", 4 → "#,##0.0000", 7 → "#,##0.0000000".
+func numberFormatPattern(precision int32) string {
+	if precision <= 0 {
+		return "#,##0"
+	}
+	return "#,##0." + strings.Repeat("0", int(precision))
+}
+
+// valueFormatReqs emits per-row number-format requests for a column over
+// rows[startRow .. startRow+len(ids)). Consecutive rows with the same
+// indicator precision are coalesced into one range request to keep the
+// BatchUpdate small.
+func valueFormatReqs(sheetID, valueCol, startRow int64, ids []int) []*sheets.Request {
+	if len(ids) == 0 {
+		return nil
+	}
+	var reqs []*sheets.Request
+	runStart := 0
+	runPattern := numberFormatPattern(indicator.PrecisionOf(ids[0]))
+	flush := func(end int) {
+		reqs = append(reqs, cellFormatReq(sheetID,
+			startRow+int64(runStart), startRow+int64(end),
+			valueCol, valueCol+1,
+			&sheets.CellFormat{
+				NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: runPattern},
+			},
+			"userEnteredFormat.numberFormat"))
+	}
+	for i := 1; i < len(ids); i++ {
+		p := numberFormatPattern(indicator.PrecisionOf(ids[i]))
+		if p != runPattern {
+			flush(i)
+			runStart = i
+			runPattern = p
+		}
+	}
+	flush(len(ids))
+	return reqs
 }
 
 // colWidthReq sets the pixel width of a single column.

@@ -8,6 +8,8 @@ import (
 
 	"github.com/samber/lo"
 	sheets "google.golang.org/api/sheets/v4"
+
+	"github.com/mtlprog/stat/internal/indicator"
 )
 
 // monitoringCol describes one column in the MONITORING sheet.
@@ -240,9 +242,23 @@ func (w *SheetsWriter) appendMonitoringRow(ctx context.Context, rows []Indicator
 	return nil
 }
 
-// monitoringIntegerCols lists column indices (0-based) that use #,##0 format.
-// B=1, D=3, E=4, F=5, G=6, H=7, L=11, M=12, V=21, W=22
-var monitoringIntegerCols = []int{1, 3, 4, 5, 6, 7, 11, 12, 21, 22}
+// monitoringValuePattern returns the Sheets number-format pattern for the
+// monitoring column at index col (0-based, including the date column at 0).
+// The pattern is derived from the mapped indicator's precision so the display
+// stays in sync with the rounding policy in indicator.IndicatorMeta. Columns
+// without a mapped indicator (fixedValue or always-nil placeholders) fall
+// back to the integer pattern, which is harmless for the literal 4.0 in
+// "Regulatory Price" and ignored for nil cells.
+func monitoringValuePattern(col int) string {
+	if col == 0 || col > len(monitoringColumns) {
+		return ""
+	}
+	c := monitoringColumns[col-1]
+	if c.indicatorID == 0 {
+		return "#,##0"
+	}
+	return numberFormatPattern(indicator.PrecisionOf(c.indicatorID))
+}
 
 // applyMonitoringFormatting applies visual formatting to the MONITORING sheet,
 // matching the original Excel layout: light-green headers, centered text,
@@ -332,10 +348,17 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		},
 		"userEnteredFormat(numberFormat,backgroundColor)"))
 
-	// Integer columns: #,##0 format (no decimal places)
-	for _, col := range monitoringIntegerCols {
+	// Per-column number formats, derived from indicator precision in
+	// IndicatorMeta. Each data column (1..40) gets its own format request so
+	// ratios/per-share amounts no longer leak shopspring's 16-digit division
+	// output into the rendered sheet.
+	for col := 1; col <= len(monitoringColumns); col++ {
+		pattern := monitoringValuePattern(col)
+		if pattern == "" {
+			continue
+		}
 		reqs = append(reqs, cellFormatReq(mon.id, 2, 10000, int64(col), int64(col+1),
-			&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: "#,##0"}},
+			&sheets.CellFormat{NumberFormat: &sheets.NumberFormat{Type: "NUMBER", Pattern: pattern}},
 			"userEnteredFormat.numberFormat"))
 	}
 

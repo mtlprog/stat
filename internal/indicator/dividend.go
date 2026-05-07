@@ -95,25 +95,14 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 		i34 = i10.Div(i54)
 	}
 
-	// Display precision split:
-	//   - Percentages and large ratios (I16, I17, I34) → 2 decimals: avoids
-	//     14-digit fractions in MONITORING / IND_ALL.
-	//   - Per-share amounts (I15, I33, I54) → 4 decimals: dividend per share
-	//     is ~0.004 EURMTL — rounding to hundredths zeroes out the signal.
-	// Raw amounts (I11) and prices (I55) keep the upstream 7-decimal Stellar
-	// precision, since they're concrete asset quantities.
-	const (
-		ratioPrecision    = 2
-		perSharePrecision = 4
-	)
 	return []Indicator{
 		NewIndicator(11, i11, "", ""),
-		NewIndicator(15, i15.Round(perSharePrecision), "", ""),
-		NewIndicator(16, i16.Round(ratioPrecision), "", ""),
-		NewIndicator(17, i17.Round(ratioPrecision), "", ""),
-		NewIndicator(33, i33.Round(perSharePrecision), "", ""),
-		NewIndicator(34, i34.Round(ratioPrecision), "", ""),
-		NewIndicator(54, i54.Round(perSharePrecision), "", ""),
+		NewIndicator(15, i15, "", ""),
+		NewIndicator(16, i16, "", ""),
+		NewIndicator(17, i17, "", ""),
+		NewIndicator(33, i33, "", ""),
+		NewIndicator(34, i34, "", ""),
+		NewIndicator(54, i54, "", ""),
 		NewIndicator(55, i55, "", ""),
 	}, nil
 }
@@ -123,7 +112,7 @@ func (c *DividendCalculator) Calculate(ctx context.Context, data domain.FundStru
 // snapshot → I10 history in the indicator repository. Per CLAUDE.md, real DB
 // errors from EITHER source are propagated as errors — they must NOT be
 // conflated with "data not found" (which is the only legitimate signal to
-// chain to the next source). Returns zero (and logs Warn) only when both
+// chain to the next source). Returns zero (and logs Info) only when both
 // sources legitimately have no data.
 func fetchPriceYearAgo(ctx context.Context, hist *HistoricalData) (decimal.Decimal, error) {
 	yearAgo := time.Now().UTC().AddDate(-1, 0, 0)

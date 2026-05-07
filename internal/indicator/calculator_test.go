@@ -195,10 +195,13 @@ func TestLayer1CalculatorFromLiveMetrics(t *testing.T) {
 		want decimal.Decimal
 		desc string
 	}{
+		// I5/I6/I7 round to 0dp via IndicatorMeta.Precision (token counts) —
+		// I5 sums the raw circulation values then rounds, so .22+.30=.52 rounds
+		// up to 647636.
 		{3, decimal.NewFromInt(1_839_200), "I3 sums I51+I52+I53+I58+I59+I60"},
-		{6, decimal.RequireFromString("105663.22"), "I6 from LiveMetrics"},
-		{7, decimal.RequireFromString("541972.30"), "I7 from LiveMetrics"},
-		{5, decimal.RequireFromString("647635.52"), "I5 = I6 + I7"},
+		{6, decimal.NewFromInt(105663), "I6 from LiveMetrics, rounded to 0dp"},
+		{7, decimal.NewFromInt(541972), "I7 from LiveMetrics, rounded to 0dp"},
+		{5, decimal.NewFromInt(647636), "I5 = round(I6_raw + I7_raw) = round(647635.52)"},
 		{10, decimal.RequireFromString("8.5"), "I10 from LiveMetrics"},
 		{49, decimal.RequireFromString("0.4"), "I49 from LiveMetrics"},
 	}

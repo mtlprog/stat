@@ -12,59 +12,84 @@ import (
 	"github.com/mtlprog/stat/internal/snapshot"
 )
 
-// IndicatorMeta holds the canonical name, unit, and description for an indicator.
+// IndicatorMeta holds the canonical name, unit, description, and display
+// precision for an indicator. Precision is the number of decimal places to
+// which NewIndicator rounds the raw computed value — it's the single source
+// of truth for rounding across all sinks (DB, API JSON, IND_ALL, IND_MAIN,
+// MONITORING).
+//
+// Precision policy by semantic class:
+//   - 0: integer counts (shareholders, share quantities, BTC EUR rate)
+//   - 2: monetary EUR/EURMTL sums; ratios already scaled ×100 (percentages)
+//     and most multipliers (P/B, P/E)
+//   - 4: per-share amounts (DPS, EPS, Book Value) — 2dp would zero out the
+//     signal at typical fund-share scale ~0.004 EURMTL; small ratios
+//     (D/BV, BTC fractions) for the same reason
+//   - 7: Stellar-protocol prices (stroop precision) — I10/I49/I55
 type IndicatorMeta struct {
 	Name        string
 	Unit        string
 	Description string
+	Precision   int32
 }
 
 // indicatorRegistry maps indicator IDs to their canonical metadata.
 // All calculators MUST use NewIndicator() to construct indicators from this registry.
 // Descriptions are sourced from описание_и_формулы_параметров.xlsx.
 var indicatorRegistry = map[int]IndicatorMeta{
-	1:  {Name: "Market Cap EUR", Unit: "EURMTL", Description: "Рыночная капитализация в евро"},
-	2:  {Name: "Market Cap BTC", Unit: "BTC", Description: "Рыночная капитализация в биткоинах"},
-	3:  {Name: "Assets Value MTLF", Unit: "EURMTL", Description: "Совокупная стоимость активов"},
-	4:  {Name: "Operating Balance", Unit: "EURMTL", Description: "Кэш и его эквивалент"},
-	5:  {Name: "Total Shares", Unit: "shares", Description: "Количество всех акций фонда на рынке"},
-	6:  {Name: "MTL in Circulation", Unit: "MTL", Description: "Количество акций MTL на рынке"},
-	7:  {Name: "MTLRECT in Circulation", Unit: "MTLRECT", Description: "Количество акций MTLRECT на рынке"},
-	8:  {Name: "Share Book Value", Unit: "EURMTL", Description: "Балансовая стоимость MTL акции"},
-	10: {Name: "Share Market Price", Unit: "EURMTL", Description: "Рыночная цена MTL акции"},
-	11: {Name: "Monthly Dividends", Unit: "EURMTL", Description: "Объём дивидендов, начисленных за последний месяц"},
-	15: {Name: "Dividends Per Share", Unit: "EURMTL", Description: "Объём месячных дивидендов на 1 акцию"},
-	16: {Name: "Annual Dividend Yield 1", Unit: "%", Description: "Прогноз годовой доходности 1 акции по медиане"},
-	17: {Name: "Annual Dividend Yield 2", Unit: "%", Description: "Скорректированная прогнозируемая доходность акции по медиане к цене акции год назад"},
-	18: {Name: "Shareholders by EURMTL", Unit: "accounts", Description: "Полное кол-во аккаунтов, получивших дивиденды в EURMTL в последнем месяце"},
-	21: {Name: "Average Shareholding", Unit: "shares", Description: "Средний объём акционерного пакета"},
-	22: {Name: "Average Value per Shareholder", Unit: "EURMTL", Description: "Средняя цена акционерного пакета"},
-	23: {Name: "Median Shareholding", Unit: "shares", Description: "Медианное количество акций в акционерном пакете"},
-	24: {Name: "EURMTL Participants", Unit: "accounts", Description: "Число Stellar-аккаунтов с ненулевым балансом EURMTL"},
-	25: {Name: "EURMTL Daily Volume", Unit: "EURMTL", Description: "Оборот токеномики за прошлые сутки"},
-	26: {Name: "EURMTL 30d Volume", Unit: "EURMTL", Description: "Совокупный оборот токеномики за последние 30 дней"},
-	27: {Name: "MTL Shareholders (>=1)", Unit: "accounts", Description: "Число Stellar-аккаунтов, на которых более 1 MTL или MTLRECT"},
-	30: {Name: "Price/Book Ratio", Unit: "ratio", Description: "Ценность акции от её балансовой стоимости"},
-	33: {Name: "Earnings Per Share", Unit: "EURMTL", Description: "Доход на акцию"},
-	34: {Name: "Price/Earnings Ratio", Unit: "ratio", Description: "Относительная ценность акции по дивиденду"},
-	40: {Name: "Association Participants", Unit: "accounts", Description: "Число участников Ассоциации Монтелиберо, держателей MTLAP"},
-	43: {Name: "Total ROI", Unit: "%", Description: "Общая рентабельность инвестиций"},
-	44: {Name: "Beta", Unit: "ratio", Description: "Чувствительность акции к движению рынка (биткоину)"},
-	45: {Name: "Sharpe Ratio", Unit: "ratio", Description: "Доходность на единицу риска"},
-	46: {Name: "Sortino Ratio", Unit: "ratio", Description: "Доходность на единицу риска при негативной волатильности"},
-	47: {Name: "Value at Risk", Unit: "%", Description: "Оценка потенциального убытка с заданной вероятностью"},
-	48: {Name: "Dividend/Book Value", Unit: "ratio", Description: "Эффективность управления балансом"},
-	49: {Name: "MTLRECT Market Price", Unit: "EURMTL", Description: "Рыночная цена MTLRECT"},
-	51: {Name: "DEFI Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда DEFI"},
-	52: {Name: "MCITY Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда MCITY"},
-	53: {Name: "MABIZ Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда MABIZ"},
-	54: {Name: "Annual DPS", Unit: "EURMTL", Description: "Годовые дивиденды на акцию"},
-	55: {Name: "Price Year Ago", Unit: "EURMTL", Description: "Рыночная цена MTL акции год назад"},
-	56: {Name: "MFApart Total Value", Unit: "EURMTL", Description: "Стоимость активов ПИФ MFApart"},
-	58: {Name: "Issuer Free Assets", Unit: "EURMTL", Description: "Свободные активы эмитента"},
-	59: {Name: "BOSS Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда BOSS"},
-	60: {Name: "ADMIN Total Value", Unit: "EURMTL", Description: "Стоимость активов счёта ADMIN"},
-	61: {Name: "BTC Rate", Unit: "EUR", Description: "Курс BTC в EUR"},
+	1:  {Name: "Market Cap EUR", Unit: "EURMTL", Description: "Рыночная капитализация в евро", Precision: 2},
+	2:  {Name: "Market Cap BTC", Unit: "BTC", Description: "Рыночная капитализация в биткоинах", Precision: 4},
+	3:  {Name: "Assets Value MTLF", Unit: "EURMTL", Description: "Совокупная стоимость активов", Precision: 2},
+	4:  {Name: "Operating Balance", Unit: "EURMTL", Description: "Кэш и его эквивалент", Precision: 2},
+	5:  {Name: "Total Shares", Unit: "shares", Description: "Количество всех акций фонда на рынке", Precision: 0},
+	6:  {Name: "MTL in Circulation", Unit: "MTL", Description: "Количество акций MTL на рынке", Precision: 0},
+	7:  {Name: "MTLRECT in Circulation", Unit: "MTLRECT", Description: "Количество акций MTLRECT на рынке", Precision: 0},
+	8:  {Name: "Share Book Value", Unit: "EURMTL", Description: "Балансовая стоимость MTL акции", Precision: 4},
+	10: {Name: "Share Market Price", Unit: "EURMTL", Description: "Рыночная цена MTL акции", Precision: 7},
+	11: {Name: "Monthly Dividends", Unit: "EURMTL", Description: "Объём дивидендов, начисленных за последний месяц", Precision: 2},
+	15: {Name: "Dividends Per Share", Unit: "EURMTL", Description: "Объём месячных дивидендов на 1 акцию", Precision: 4},
+	16: {Name: "Annual Dividend Yield 1", Unit: "%", Description: "Прогноз годовой доходности 1 акции по медиане", Precision: 2},
+	17: {Name: "Annual Dividend Yield 2", Unit: "%", Description: "Скорректированная прогнозируемая доходность акции по медиане к цене акции год назад", Precision: 2},
+	18: {Name: "Shareholders by EURMTL", Unit: "accounts", Description: "Полное кол-во аккаунтов, получивших дивиденды в EURMTL в последнем месяце", Precision: 0},
+	21: {Name: "Average Shareholding", Unit: "shares", Description: "Средний объём акционерного пакета", Precision: 0},
+	22: {Name: "Average Value per Shareholder", Unit: "EURMTL", Description: "Средняя цена акционерного пакета", Precision: 0},
+	23: {Name: "Median Shareholding", Unit: "shares", Description: "Медианное количество акций в акционерном пакете", Precision: 0},
+	24: {Name: "EURMTL Participants", Unit: "accounts", Description: "Число Stellar-аккаунтов с ненулевым балансом EURMTL", Precision: 0},
+	25: {Name: "EURMTL Daily Volume", Unit: "EURMTL", Description: "Оборот токеномики за прошлые сутки", Precision: 2},
+	26: {Name: "EURMTL 30d Volume", Unit: "EURMTL", Description: "Совокупный оборот токеномики за последние 30 дней", Precision: 2},
+	27: {Name: "MTL Shareholders (>=1)", Unit: "accounts", Description: "Число Stellar-аккаунтов, на которых более 1 MTL или MTLRECT", Precision: 0},
+	30: {Name: "Price/Book Ratio", Unit: "ratio", Description: "Ценность акции от её балансовой стоимости", Precision: 2},
+	33: {Name: "Earnings Per Share", Unit: "EURMTL", Description: "Доход на акцию", Precision: 4},
+	34: {Name: "Price/Earnings Ratio", Unit: "ratio", Description: "Относительная ценность акции по дивиденду", Precision: 2},
+	40: {Name: "Association Participants", Unit: "accounts", Description: "Число участников Ассоциации Монтелиберо, держателей MTLAP", Precision: 0},
+	43: {Name: "Total ROI", Unit: "%", Description: "Общая рентабельность инвестиций", Precision: 2},
+	44: {Name: "Beta", Unit: "ratio", Description: "Чувствительность акции к движению рынка (биткоину)", Precision: 4},
+	45: {Name: "Sharpe Ratio", Unit: "ratio", Description: "Доходность на единицу риска", Precision: 4},
+	46: {Name: "Sortino Ratio", Unit: "ratio", Description: "Доходность на единицу риска при негативной волатильности", Precision: 4},
+	47: {Name: "Value at Risk", Unit: "%", Description: "Оценка потенциального убытка с заданной вероятностью", Precision: 4},
+	48: {Name: "Dividend/Book Value", Unit: "ratio", Description: "Эффективность управления балансом", Precision: 4},
+	49: {Name: "MTLRECT Market Price", Unit: "EURMTL", Description: "Рыночная цена MTLRECT", Precision: 7},
+	51: {Name: "DEFI Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда DEFI", Precision: 2},
+	52: {Name: "MCITY Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда MCITY", Precision: 2},
+	53: {Name: "MABIZ Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда MABIZ", Precision: 2},
+	54: {Name: "Annual DPS", Unit: "EURMTL", Description: "Годовые дивиденды на акцию", Precision: 4},
+	55: {Name: "Price Year Ago", Unit: "EURMTL", Description: "Рыночная цена MTL акции год назад", Precision: 7},
+	56: {Name: "MFApart Total Value", Unit: "EURMTL", Description: "Стоимость активов ПИФ MFApart", Precision: 2},
+	58: {Name: "Issuer Free Assets", Unit: "EURMTL", Description: "Свободные активы эмитента", Precision: 2},
+	59: {Name: "BOSS Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда BOSS", Precision: 2},
+	60: {Name: "ADMIN Total Value", Unit: "EURMTL", Description: "Стоимость активов счёта ADMIN", Precision: 2},
+	61: {Name: "BTC Rate", Unit: "EUR", Description: "Курс BTC в EUR", Precision: 0},
+}
+
+// PrecisionOf returns the display precision (decimal places) for an indicator
+// ID. Returns 0 for unregistered IDs. Used by the export package to derive
+// per-cell number-format patterns from the same source of truth NewIndicator
+// rounds against.
+func PrecisionOf(id int) int32 {
+	if meta, ok := indicatorRegistry[id]; ok {
+		return meta.Precision
+	}
+	return 0
 }
 
 // Indicator represents a calculated statistical indicator.
@@ -76,11 +101,20 @@ type Indicator struct {
 	Description string          `json:"description,omitempty"`
 }
 
-// NewIndicator creates an indicator using the canonical metadata from the registry.
-// Falls back to the provided name and unit if the ID is not registered.
+// NewIndicator creates an indicator using the canonical metadata from the
+// registry. The value is rounded to meta.Precision so every downstream sink
+// (DB / API / sheets) sees the same display-precision number — calculators
+// don't carry per-indicator rounding logic. Falls back to the provided name
+// and unit (with no rounding) if the ID is not registered.
 func NewIndicator(id int, value decimal.Decimal, name, unit string) Indicator {
 	if meta, ok := indicatorRegistry[id]; ok {
-		return Indicator{ID: id, Name: meta.Name, Value: value, Unit: meta.Unit, Description: meta.Description}
+		return Indicator{
+			ID:          id,
+			Name:        meta.Name,
+			Value:       value.Round(meta.Precision),
+			Unit:        meta.Unit,
+			Description: meta.Description,
+		}
 	}
 	return Indicator{ID: id, Name: name, Value: value, Unit: unit}
 }
