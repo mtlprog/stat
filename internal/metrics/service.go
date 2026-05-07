@@ -75,10 +75,10 @@ func NewService(h Horizon, p PriceSource, expert PaymentStatsSource, indicatorRe
 	}
 }
 
-// EnrichMetrics computes all live indicators (I6, I7, I10, I11, I23-I27, I49, I62)
-// for the snapshot dated `date` and stores them in data.LiveMetrics. On any
-// fetch failure it logs an error and falls back to the prior day's persisted
-// value, never zero.
+// EnrichMetrics computes all live indicators (I6, I7, I10, I11, I18, I23-I27,
+// I49, I62) for the snapshot dated `date` and stores them in data.LiveMetrics.
+// On any fetch failure it logs an error and falls back to the prior day's
+// persisted value, never zero.
 func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domain.FundStructureData) error {
 	prev := s.priorMetrics(ctx, date)
 	m := &domain.FundLiveMetrics{}
@@ -153,21 +153,21 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 		}
 	} else {
 		// Cascade: a failed shareholder walk (already logged at Error inside
-		// fetchShareholderStats) degrades I27, I23, AND I18 simultaneously.
+		// fetchShareholderStats) degrades I18, I23, I27, AND I62 simultaneously.
 		// Info-level surface so the second-order effect is visible without
 		// duplicating the upstream Error severity.
-		slog.Info("metrics: I18 falls back to prior because the shareholder walk failed upstream (cascade with I27, I23)")
+		slog.Info("metrics: I18 falls back to prior because the shareholder walk failed upstream (cascade with I23, I27, I62)")
 		m.EURMTLShareholders = pickPrior(prev, 18)
 	}
 	done()
 
-	// I11: monthly dividend outflow summed across every fund account that might
-	// be a dividend source (issuer first, then APART/etc). The 30-day rolling
-	// window means the value can legitimately go to zero on the last day a
-	// payment falls off — but the user's expectation is that I11 is a "last
-	// known monthly amount", monotonic between disbursements. So when the live
-	// sum is zero AND yesterday's persisted value was non-zero, we keep
-	// yesterday's value rather than write a zero.
+	// I11: monthly dividend outflow summed across every fund account in
+	// `s.fundAddrs` (the full domain.AccountRegistry, no ordering). The 30-day
+	// rolling window means the value can legitimately go to zero on the last
+	// day a payment falls off — but the user's expectation is that I11 is a
+	// "last known monthly amount", monotonic between disbursements. So when
+	// the live sum is zero AND yesterday's persisted value was non-zero, we
+	// keep yesterday's value rather than write a zero.
 	done = stage("dividends_walk_all_accounts")
 	{
 		m.MonthlyDividends = s.computeI11(ctx, prev)
@@ -296,7 +296,7 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 	defer mtlCancel()
 	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlCtx, mtlAsset, minNonZero)
 	if err != nil {
-		slog.Error("metrics: fetch MTL holders failed", "error", err)
+		slog.Error("metrics: fetch MTL holders failed, cascade falls I23/I27/I62 (and I18 downstream) to prior", "error", err)
 		return nil, shareholderStats{}, false
 	}
 
@@ -304,7 +304,7 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 	defer mtlrectCancel()
 	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlrectCtx, mtlrectAsset, minNonZero)
 	if err != nil {
-		slog.Error("metrics: fetch MTLRECT holders failed", "error", err)
+		slog.Error("metrics: fetch MTLRECT holders failed, cascade falls I23/I27/I62 (and I18 downstream) to prior", "error", err)
 		return nil, shareholderStats{}, false
 	}
 
