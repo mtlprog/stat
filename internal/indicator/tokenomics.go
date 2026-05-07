@@ -8,14 +8,16 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 )
 
-// TokenomicsCalculator computes tokenomics indicators (I18, I21-I27, I62)
+// TokenomicsCalculator computes tokenomics indicators (I18, I21-I27, I40, I62)
 // from snapshot LiveMetrics + Layer1 deps. No Horizon calls — every live
-// value (I18, I23-I27, I62) is read from data.LiveMetrics, which
+// value (I18, I23-I27, I40, I62) is read from data.LiveMetrics, which
 // metrics.EnrichMetrics populates upstream with sticky-fallback to the prior
 // day on fetch failures.
 type TokenomicsCalculator struct{}
 
-func (c *TokenomicsCalculator) IDs() []int          { return []int{18, 21, 22, 23, 24, 25, 26, 27, 62} }
+func (c *TokenomicsCalculator) IDs() []int {
+	return []int{18, 21, 22, 23, 24, 25, 26, 27, 40, 62}
+}
 func (c *TokenomicsCalculator) Dependencies() []int { return []int{1, 5} }
 
 func (c *TokenomicsCalculator) Calculate(_ context.Context, data domain.FundStructureData, deps map[int]Indicator, _ *HistoricalData) ([]Indicator, error) {
@@ -29,6 +31,7 @@ func (c *TokenomicsCalculator) Calculate(_ context.Context, data domain.FundStru
 	i25 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.EURMTLDailyVolume })
 	i26 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.EURMTLPaymentTotal })
 	i27 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLShareholders })
+	i40 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLAPHolders })
 	i62 := liveValue(data.LiveMetrics, func(m *domain.FundLiveMetrics) *string { return m.MTLShareholdersAny })
 
 	// I21: Average Shareholding = I5 / I27
@@ -52,6 +55,7 @@ func (c *TokenomicsCalculator) Calculate(_ context.Context, data domain.FundStru
 		NewIndicator(25, i25, "", ""),
 		NewIndicator(26, i26, "", ""),
 		NewIndicator(27, i27, "", ""),
+		NewIndicator(40, i40, "", ""),
 		NewIndicator(62, i62, "", ""),
 	}, nil
 }

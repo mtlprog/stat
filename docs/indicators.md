@@ -38,6 +38,7 @@ Legend:
 | I30 | Price-to-book ratio           | I10 / I8                             | ✅     | `layer2.go`                                               |
 | I34 | P/E                           | I10 / I54                            | ✅     | `dividend.go`                                             |
 | I39 | Bitcoin purchase price        | EURMTL spent on BTC / BTCMTL held    | ❌     | TODO — see Q1                                             |
+| I40 | Association Participants      | MTLAP holders with balance ≥1        | ✅     | `metrics/service.go` (live, `MTLAPHolders`)               |
 | I43 | Total ROI                     | ((I10 − I55) + I54) / I55            | ✅     | `dividend.go` (folded in from the deleted analytics calc) |
 | I49 | MTLRECT Market Price          | VWAP last 100 trades MTLRECT/EURMTL  | ✅     | `layer1.go` (live, `MTLRECTMarketPrice`)                  |
 | I50 | MTL and MTLRECT diff          | control: divergence MTL vs MTLRECT   | ❌     | TODO — see Q2                                             |
@@ -114,12 +115,10 @@ reflects them.
   appended at the end (the sheet grew from 40 to 41 data columns).
 - **I43 home.** Moved from the now-deleted `AnalyticsCalculator` into `DividendCalculator`
   (its dependencies — I54, I55 — already lived there).
-- **Deprecated and removed.** I16 (ADY1 median-based), I33 (EPS), I40 (Association
-  Participants — the entire MTLAP holders flow including `domain.MTLAPAsset` and
-  `LiveMetrics.MTLAPHolders`), I44 (Beta), I45 (Sharpe), I46 (Sortino), I47 (VaR), I48
-  (D/BV). All registry entries gone; calculator code gone; MONITORING column slots zeroed
-  (column order is load-bearing — see `CLAUDE.md`); historical `fund_indicators` rows for
-  these IDs are left untouched (read-only history).
+- **Deprecated and removed.** I16 (ADY1 median-based), I33 (EPS), I44 (Beta), I45 (Sharpe),
+  I46 (Sortino), I47 (VaR), I48 (D/BV). All registry entries gone; calculator code gone;
+  MONITORING column slots zeroed (column order is load-bearing — see `CLAUDE.md`);
+  historical `fund_indicators` rows for these IDs are left untouched (read-only history).
 - **Source contract for I25 / I26.** `internal/stellarexpert.Client.FetchEURMTLPaymentStats`
   is a single GET to `/explorer/public/asset/EURMTL-…-2/stats-history`. Daily I25 is the
   exact `payments_amount` row whose `ts` matches `date` (UTC midnight); cumulative I26 is the

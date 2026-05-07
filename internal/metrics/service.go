@@ -76,15 +76,16 @@ func NewService(h Horizon, p PriceSource, expert PaymentStatsSource, indicatorRe
 }
 
 // EnrichMetrics computes all live indicators (I6, I7, I10, I11, I18, I23-I27,
-// I49, I62) for the snapshot dated `date` and stores them in data.LiveMetrics.
-// On any fetch failure it logs an error and falls back to the prior day's
-// persisted value, never zero.
+// I40, I49, I62) for the snapshot dated `date` and stores them in
+// data.LiveMetrics. On any fetch failure it logs an error and falls back to
+// the prior day's persisted value, never zero.
 func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domain.FundStructureData) error {
 	prev := s.priorMetrics(ctx, date)
 	m := &domain.FundLiveMetrics{}
 
 	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
 	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
+	mtlapAsset := domain.MTLAPAsset()
 	eurmtlAsset := domain.EURMTLAsset()
 
 	stage := func(name string) func() {
@@ -123,6 +124,23 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 			m.EURMTLParticipants = pickPrior(prev, 24)
 		} else {
 			m.EURMTLParticipants = ptr(decimal.NewFromInt(int64(count)).String())
+		}
+		cancel()
+	}
+	done()
+
+	// I40: count of MTLAP holders with balance ≥1. /assets `accounts.authorized`
+	// for MTLAP returns ~1 because most holders are AUTHORIZED_TO_MAINTAIN_LIABILITIES,
+	// not authorized — so we have to walk and apply the balance filter.
+	done = stage("MTLAP_holders")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		minOne := decimal.NewFromInt(1)
+		if count, err := s.horizon.FetchAssetHolderCountByBalance(stepCtx, mtlapAsset, minOne); err != nil {
+			slog.Error("metrics: fetch MTLAP holders failed, reusing prior I40", "error", err)
+			m.MTLAPHolders = pickPrior(prev, 40)
+		} else {
+			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(count)).String())
 		}
 		cancel()
 	}

@@ -59,6 +59,7 @@ var indicatorRegistry = map[int]IndicatorMeta{
 	27: {Name: "More-one-share Shareholders", Unit: "accounts", Description: "Число Stellar-аккаунтов, на которых не менее 1 MTL или MTLRECT", Precision: 0},
 	30: {Name: "Price/Book Ratio", Unit: "ratio", Description: "Ценность акции от её балансовой стоимости", Precision: 2},
 	34: {Name: "Price/Earnings Ratio", Unit: "ratio", Description: "Относительная ценность акции по дивиденду", Precision: 2},
+	40: {Name: "Association Participants", Unit: "accounts", Description: "Число участников Ассоциации Монтелиберо, держателей MTLAP", Precision: 0},
 	43: {Name: "Total ROI", Unit: "%", Description: "Общая рентабельность инвестиций", Precision: 2},
 	49: {Name: "MTLRECT Market Price", Unit: "EURMTL", Description: "Рыночная цена MTLRECT", Precision: 7},
 	51: {Name: "DEFI Total Value", Unit: "EURMTL", Description: "Стоимость активов субфонда DEFI", Precision: 2},

@@ -38,6 +38,7 @@ type FundLiveMetrics struct {
 	MTLShareholders       *string `json:"mtl_shareholders,omitempty"`        // I27
 	MTLShareholdersAny    *string `json:"mtl_shareholders_any,omitempty"`    // I62
 	MTLShareholdersMedian *string `json:"mtl_shareholders_median,omitempty"` // I23
+	MTLAPHolders          *string `json:"mtlap_holders,omitempty"`           // I40
 	EURMTLShareholders    *string `json:"eurmtl_shareholders,omitempty"`     // I18
 }
 

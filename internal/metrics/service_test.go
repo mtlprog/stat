@@ -141,6 +141,7 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		},
 		holderCounts: map[string]int{
 			"EURMTL": 200,
+			"MTLAP":  42,
 		},
 		holderBalances: map[string]map[string]decimal.Decimal{
 			// Includes a sub-1 balance (E) so we can also exercise the I62/I27
@@ -199,8 +200,9 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		{"I6 MTL circulation", m.MTLCirculation, "850"},         // 1000 - 150
 		{"I7 MTLRECT circulation", m.MTLRECTCirculation, "450"}, // 500 - 50
 		{"I24 EURMTL participants", m.EURMTLParticipants, "200"},
-		{"I27 shareholders ≥1", m.MTLShareholders, "4"},        // A,B,C,D — E (0.5) excluded
-		{"I62 shareholders any", m.MTLShareholdersAny, "5"},    // A,B,C,D,E all counted
+		{"I27 shareholders ≥1", m.MTLShareholders, "4"},     // A,B,C,D — E (0.5) excluded
+		{"I62 shareholders any", m.MTLShareholdersAny, "5"}, // A,B,C,D,E all counted
+		{"I40 MTLAP holders", m.MTLAPHolders, "42"},
 		{"I23 median", m.MTLShareholdersMedian, "200"},         // sorted [100,150,250,300]
 		{"I18 EURMTL shareholders", m.EURMTLShareholders, "2"}, // {A,B,C,D} ∩ {A,C,X,Y} = {A,C}
 		{"I11 dividends", m.MonthlyDividends, "123.45"},
@@ -225,7 +227,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 	flake := errors.New("503 service unavailable")
 	h := &stubHorizon{
 		statsErr:       map[string]error{"MTL": flake, "MTLRECT": flake},
-		holderCountErr: map[string]error{"EURMTL": flake},
+		holderCountErr: map[string]error{"EURMTL": flake, "MTLAP": flake},
 		holderErr:      map[string]error{"MTL": flake, "MTLRECT": flake},
 		holderIDsErr:   map[string]error{"EURMTL": flake},
 		dividendsErr:   map[string]error{"GFUND1": flake, "GFUND2": flake},
@@ -237,7 +239,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		byTarget: map[string]map[int]indicator.Indicator{
 			"latest": indicatorMap(map[int]string{
 				6: "777", 7: "333", 10: "9.1", 11: "100", 18: "120", 23: "55", 24: "180",
-				25: "410", 26: "11500", 27: "5", 49: "0.7", 62: "9",
+				25: "410", 26: "11500", 27: "5", 40: "37", 49: "0.7", 62: "9",
 			}),
 		},
 	}
@@ -265,6 +267,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		"I25": {m.EURMTLDailyVolume, "410"},
 		"I26": {m.EURMTLPaymentTotal, "11500"},
 		"I27": {m.MTLShareholders, "5"},
+		"I40": {m.MTLAPHolders, "37"},
 		"I49": {m.MTLRECTMarketPrice, "0.7"},
 		"I62": {m.MTLShareholdersAny, "9"},
 	}

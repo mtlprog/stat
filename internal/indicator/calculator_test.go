@@ -60,6 +60,7 @@ func TestTokenomicsCalculatorFromLiveMetrics(t *testing.T) {
 	holdersAny := "6"
 	median := "200"
 	participants := "150"
+	mtlap := "42"
 	dailyVol := "1234.56"
 	totalVol := "56789.01"
 	data := domain.FundStructureData{
@@ -68,6 +69,7 @@ func TestTokenomicsCalculatorFromLiveMetrics(t *testing.T) {
 			MTLShareholdersAny:    &holdersAny,
 			MTLShareholdersMedian: &median,
 			EURMTLParticipants:    &participants,
+			MTLAPHolders:          &mtlap,
 			EURMTLDailyVolume:     &dailyVol,
 			EURMTLPaymentTotal:    &totalVol,
 		},
@@ -93,6 +95,7 @@ func TestTokenomicsCalculatorFromLiveMetrics(t *testing.T) {
 		{62, decimal.NewFromInt(6), "MTL+MTLRECT shareholders any"},
 		{21, decimal.NewFromInt(2500), "I5/I27"},
 		{22, decimal.NewFromInt(21250), "I1/I27"},
+		{40, decimal.NewFromInt(42), "MTLAP holders"},
 		{23, decimal.NewFromInt(200), "median shareholding"},
 		{25, decimal.RequireFromString("1234.56"), "EURMTL daily volume"},
 		{26, decimal.RequireFromString("56789.01"), "EURMTL cumulative volume"},
@@ -237,9 +240,9 @@ func TestIsRegistered(t *testing.T) {
 		desc string
 	}{
 		{1, true, "I1 — Market Cap, currently registered"},
-		{62, true, "I62 — Shareholders, added in this PR"},
+		{40, true, "I40 — Association Participants (MTLAP holders)"},
+		{62, true, "I62 — Shareholders"},
 		{16, false, "I16 — deprecated, removed from registry"},
-		{40, false, "I40 — deprecated MTLAP indicator"},
 		{44, false, "I44 — deprecated Beta"},
 		{9999, false, "never-existed ID"},
 	}
