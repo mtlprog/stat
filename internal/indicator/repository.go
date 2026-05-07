@@ -132,6 +132,9 @@ func (r *PgRepository) GetLatest(ctx context.Context, slug string) ([]Indicator,
 		if err := rows.Scan(&d, &id, &value); err != nil {
 			return nil, time.Time{}, fmt.Errorf("scanning indicator row: %w", err)
 		}
+		if !IsRegistered(id) {
+			continue
+		}
 		if d.After(latest) {
 			latest = d
 		}
@@ -173,6 +176,9 @@ func (r *PgRepository) GetHistory(ctx context.Context, slug string, ids []int, f
 		if err := rows.Scan(&p.SnapshotDate, &p.IndicatorID, &p.Value); err != nil {
 			return nil, fmt.Errorf("scanning history row: %w", err)
 		}
+		if !IsRegistered(p.IndicatorID) {
+			continue
+		}
 		points = append(points, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -205,6 +211,9 @@ func (r *PgRepository) GetNearestBefore(ctx context.Context, slug string, date t
 		if err := rows.Scan(&id, &value); err != nil {
 			return nil, fmt.Errorf("scanning nearest-before row: %w", err)
 		}
+		if !IsRegistered(id) {
+			continue
+		}
 		result[id] = NewIndicator(id, value, "", "")
 	}
 	if err := rows.Err(); err != nil {
@@ -223,6 +232,9 @@ func scanIndicators(rows pgx.Rows) ([]Indicator, error) {
 		var value decimal.Decimal
 		if err := rows.Scan(&id, &value); err != nil {
 			return nil, fmt.Errorf("scanning indicator row: %w", err)
+		}
+		if !IsRegistered(id) {
+			continue
 		}
 		indicators = append(indicators, NewIndicator(id, value, "", ""))
 	}

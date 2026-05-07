@@ -85,6 +85,15 @@ func PrecisionOf(id int) int32 {
 	return 0
 }
 
+// IsRegistered reports whether `id` is a known indicator. Used by the
+// repository to filter out deprecated IDs that still have rows in
+// `fund_indicators` but are no longer part of the registry — surfacing those
+// would return entries with empty Name/Unit/Description.
+func IsRegistered(id int) bool {
+	_, ok := indicatorRegistry[id]
+	return ok
+}
+
 // Indicator represents a calculated statistical indicator.
 type Indicator struct {
 	ID          int             `json:"id"`

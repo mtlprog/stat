@@ -230,6 +230,26 @@ func TestNewIndicatorFallback(t *testing.T) {
 	}
 }
 
+func TestIsRegistered(t *testing.T) {
+	cases := []struct {
+		id   int
+		want bool
+		desc string
+	}{
+		{1, true, "I1 — Market Cap, currently registered"},
+		{62, true, "I62 — Shareholders, added in this PR"},
+		{16, false, "I16 — deprecated, removed from registry"},
+		{40, false, "I40 — deprecated MTLAP indicator"},
+		{44, false, "I44 — deprecated Beta"},
+		{9999, false, "never-existed ID"},
+	}
+	for _, c := range cases {
+		if got := IsRegistered(c.id); got != c.want {
+			t.Errorf("IsRegistered(%d) = %v, want %v (%s)", c.id, got, c.want, c.desc)
+		}
+	}
+}
+
 func TestRegistryDuplicateIDPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
