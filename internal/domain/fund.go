@@ -33,7 +33,7 @@ type FundLiveMetrics struct {
 	MTLRECTCirculation    *string `json:"mtlrect_circulation,omitempty"`     // I7
 	MonthlyDividends      *string `json:"monthly_dividends,omitempty"`       // I11
 	EURMTLDailyVolume     *string `json:"eurmtl_daily_volume,omitempty"`     // I25
-	EURMTLPaymentTotal    *string `json:"eurmtl_payment_total,omitempty"`    // I26
+	EURMTLPaymentTotal    *string `json:"eurmtl_payment_total,omitempty"`    // I26 — old snapshots wrote `eurmtl_30d_volume`; that key is intentionally not read (indicator history is authoritative for I26)
 	EURMTLParticipants    *string `json:"eurmtl_participants,omitempty"`     // I24
 	MTLShareholders       *string `json:"mtl_shareholders,omitempty"`        // I27
 	MTLShareholdersAny    *string `json:"mtl_shareholders_any,omitempty"`    // I62

@@ -296,6 +296,65 @@ func TestEnrichMetricsNoRepoLeavesNil(t *testing.T) {
 	}
 }
 
+// fetchShareholderStats: I27 uses GreaterThanOrEqual(1) and I62 uses any
+// positive balance. Lock the boundary at exactly 1 — a holder whose combined
+// MTL+MTLRECT sums to 1.0 must count in I27 (not just I62), guarding against
+// a silent drift to GreaterThan that would mis-bucket whole-share holders.
+func TestFetchShareholderStatsBoundaryAtBalanceOne(t *testing.T) {
+	h := &stubHorizon{
+		holderBalances: map[string]map[string]decimal.Decimal{
+			"MTL": {
+				"BoundaryHolder": decimal.RequireFromString("1.0"),  // exactly 1 → I27 + I62
+				"AboveOne":       decimal.RequireFromString("1.01"), // > 1 → I27 + I62
+				"SubOne":         decimal.RequireFromString("0.5"),  // < 1 → I62 only
+			},
+			"MTLRECT": {},
+		},
+	}
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, &stubIndicatorRepo{}, nil)
+
+	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
+	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
+	_, stats, ok := svc.fetchShareholderStats(context.Background(), mtlAsset, mtlrectAsset)
+	if !ok {
+		t.Fatal("fetchShareholderStats ok=false, want true")
+	}
+	if stats.countAtLeastOne != 2 {
+		t.Errorf("countAtLeastOne = %d, want 2 (BoundaryHolder=1.0 must count, GreaterThanOrEqual)", stats.countAtLeastOne)
+	}
+	if stats.countAny != 3 {
+		t.Errorf("countAny = %d, want 3 (all positive balances)", stats.countAny)
+	}
+}
+
+// Median is computed over the ≥1 cohort only — a holder with sub-1 balance
+// must be excluded so the median can't be silently dragged toward zero.
+// Without the cohort filter, median over [0.5, 100, 200] would be 100;
+// with the filter, median over [100, 200] is 150.
+func TestFetchShareholderStatsMedianExcludesSubOneCohort(t *testing.T) {
+	h := &stubHorizon{
+		holderBalances: map[string]map[string]decimal.Decimal{
+			"MTL": {
+				"A": decimal.NewFromInt(100),
+				"B": decimal.NewFromInt(200),
+				"C": decimal.RequireFromString("0.5"), // sub-1 — excluded from median
+			},
+			"MTLRECT": {},
+		},
+	}
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, &stubIndicatorRepo{}, nil)
+
+	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
+	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
+	_, stats, ok := svc.fetchShareholderStats(context.Background(), mtlAsset, mtlrectAsset)
+	if !ok {
+		t.Fatal("fetchShareholderStats ok=false, want true")
+	}
+	if !stats.median.Equal(decimal.NewFromInt(150)) {
+		t.Errorf("median = %s, want 150 (median over {100,200} cohort, NOT {0.5,100,200})", stats.median)
+	}
+}
+
 // stellar.expert hasn't ingested the requested date yet → ErrNoDailyEntry
 // must collapse to sticky-fallback, NOT propagate as an error.
 func TestEnrichMetricsExpertNoDailyEntryUsesPrior(t *testing.T) {

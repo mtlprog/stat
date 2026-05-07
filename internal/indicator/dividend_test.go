@@ -79,6 +79,53 @@ func TestFetchPriceYearAgoFallsBackWhenSnapshotMissing(t *testing.T) {
 	}
 }
 
+// I43 (Total ROI) lives in DividendCalculator after the analytics-package
+// removal. Lock the formula `((I10 - I55) + I54) / I55 * 100` against a
+// known-good numeric example so a sign flip / off-by-100 / divisor swap
+// can't slip past the end-to-end tests that only assert non-zero.
+//
+// Inputs: I10=12, I55=10, I54=1 ⇒ I43 = ((12-10)+1)/10*100 = 30%.
+func TestDividendCalculatorI43ROIExplicitFormula(t *testing.T) {
+	// Stub I55 history so dividend.fetchPriceYearAgo resolves to 10.
+	snapRepo := &stubSnapshotRepo{notFound: true}
+	indRepo := &stubIndicatorRepoForDividend{
+		byID: map[int]Indicator{10: {ID: 10, Value: decimal.NewFromFloat(10)}},
+	}
+	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
+
+	// I54 = I15 * 12 = (I11/I5) * 12. Pick I11=I5/12 so I15=1/12 and I54=1.
+	i5 := decimal.NewFromInt(120)
+	i11Str := "10" // I11/I5 = 10/120; ×12 = 1.
+	data := domain.FundStructureData{
+		LiveMetrics: &domain.FundLiveMetrics{MonthlyDividends: &i11Str},
+	}
+	deps := map[int]Indicator{
+		5:  {ID: 5, Value: i5},
+		10: {ID: 10, Value: decimal.NewFromInt(12)},
+	}
+
+	out, err := (&DividendCalculator{}).Calculate(context.Background(), data, deps, hist)
+	if err != nil {
+		t.Fatalf("Calculate: %v", err)
+	}
+	by := make(map[int]decimal.Decimal, len(out))
+	for _, ind := range out {
+		by[ind.ID] = ind.Value
+	}
+
+	if !by[54].Equal(decimal.NewFromInt(1)) {
+		t.Fatalf("I54 = %s, want 1 (precondition for the I43 numeric assertion)", by[54])
+	}
+	if !by[55].Equal(decimal.NewFromInt(10)) {
+		t.Fatalf("I55 = %s, want 10 (precondition)", by[55])
+	}
+
+	want := decimal.NewFromInt(30) // ((12-10)+1)/10 * 100
+	if !by[43].Equal(want) {
+		t.Errorf("I43 = %s, want %s ((I10-I55)+I54)/I55*100 = ((12-10)+1)/10*100 = 30", by[43], want)
+	}
+}
+
 // CLAUDE.md: snapshot.ErrNotFound and a real DB error must NOT be conflated.
 // A transient pg blip on the snapshot query has to surface as an error from
 // fetchPriceYearAgo so the caller can fail loud — silently chaining to

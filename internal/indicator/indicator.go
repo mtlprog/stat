@@ -122,8 +122,9 @@ type Calculator interface {
 // HistoricalData provides access to historical snapshots and indicator values
 // for time-series calculations. IndicatorRepo is the fallback source for dates
 // that predate the LiveMetrics rollout — those snapshots don't carry
-// MTLMarketPrice / MonthlyDividends, so the indicator table (populated from
-// the legacy MONITORING import) is the only place those values exist.
+// MTLMarketPrice / MonthlyDividends, so for those older dates the indicator
+// table is the only place such values exist. Daily `stat report` writes to
+// IndicatorRepo too, so newer dates have both sources.
 type HistoricalData struct {
 	Repo          snapshot.Repository
 	IndicatorRepo Repository
