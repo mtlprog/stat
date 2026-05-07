@@ -20,8 +20,13 @@ type monitoringCol struct {
 	fixedValue  any
 }
 
-// monitoringColumns defines the 40 data columns (B through AO) in order.
+// monitoringColumns defines the 41 data columns (B through AP) in order.
 // Column A (Date) is prepended separately in buildMonitoringRows.
+//
+// Column order is load-bearing — row alignment in MONITORING (and in
+// import-excel / import-indicators-from-sheets) depends on positional
+// matching. Deprecated indicators have their indicatorID zeroed so the
+// column slot survives but emits nothing; do not delete the slot.
 var monitoringColumns = []monitoringCol{
 	{header: "Market Cap EUR", indicatorID: 1},
 	{header: "Market Cap BTC", indicatorID: 2},
@@ -38,7 +43,7 @@ var monitoringColumns = []monitoringCol{
 	{header: "Dividends in btcmtl", indicatorID: 0, fixedValue: nil},
 	{header: "Dividends in usdm", indicatorID: 0, fixedValue: nil},
 	{header: "Dividends per share", indicatorID: 15},
-	{header: "Annual Dividend Yield 1", indicatorID: 16},
+	{header: "Annual Dividend Yield 1", indicatorID: 0, fixedValue: nil}, // I16 deprecated
 	{header: "Annual Dividend Yield 2", indicatorID: 17},
 	{header: "Shareholders by eurmtl", indicatorID: 18},
 	{header: "Shareholders by satsmtl", indicatorID: 0, fixedValue: nil},
@@ -55,18 +60,19 @@ var monitoringColumns = []monitoringCol{
 	{header: "Price-to-book ratio", indicatorID: 30},
 	{header: "EBITDA", indicatorID: 0, fixedValue: nil},
 	{header: "EBITDA margin", indicatorID: 0, fixedValue: nil},
-	{header: "EPS", indicatorID: 33},
+	{header: "EPS", indicatorID: 0, fixedValue: nil}, // I33 deprecated
 	{header: "P/E", indicatorID: 34},
 	{header: "P/S", indicatorID: 0, fixedValue: nil},
 	{header: "P/S (by cap)", indicatorID: 0, fixedValue: nil},
 	{header: "Margin", indicatorID: 0, fixedValue: nil},
 	{header: "Payout Ratio", indicatorID: 0, fixedValue: nil},
 	{header: "BPP", indicatorID: 0, fixedValue: nil},
-	{header: "MTLAP", indicatorID: 40},
+	{header: "MTLAP", indicatorID: 0, fixedValue: nil}, // I40 deprecated
+	{header: "Shareholders", indicatorID: 62},
 }
 
-// MonitoringColumnIndicatorIDs returns the indicator ID for each of the 40 MONITORING
-// data columns (B through AO). A value of 0 means no mapped indicator at that index.
+// MonitoringColumnIndicatorIDs returns the indicator ID for each of the 41 MONITORING
+// data columns (B through AP). A value of 0 means no mapped indicator at that index.
 func MonitoringColumnIndicatorIDs() []int {
 	return lo.Map(monitoringColumns, func(c monitoringCol, _ int) int { return c.indicatorID })
 }
@@ -75,7 +81,7 @@ func MonitoringColumnIndicatorIDs() []int {
 func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any, dataRow []any) {
 	byID := lo.KeyBy(rows, func(r IndicatorRow) int { return r.ID })
 
-	// Row 1: column numbers 1..40 (A is blank)
+	// Row 1: column numbers 1..41 (A is blank)
 	colNums := make([]any, 1+len(monitoringColumns))
 	colNums[0] = ""
 	for i := range monitoringColumns {
@@ -232,7 +238,7 @@ func (w *SheetsWriter) appendMonitoringRow(ctx context.Context, rows []Indicator
 
 	_, err = w.svc.Spreadsheets.Values.Append(
 		w.spreadsheetID,
-		"MONITORING!A:AO",
+		"MONITORING!A:AP",
 		&sheets.ValueRange{Values: [][]any{dataRow}},
 	).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
 	if err != nil {
@@ -267,7 +273,7 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 	// #D9EAD3 — light green from the original Excel
 	lightGreen := &sheets.Color{Red: 0.851, Green: 0.918, Blue: 0.827}
 
-	const totalCols = 41
+	const totalCols = 42
 
 	var reqs []*sheets.Request
 
@@ -285,9 +291,9 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 	// vertical text rotation to fit narrow columns (matching Excel's 75px row height)
 	reqs = append(reqs, cellFormatReq(mon.id, 1, 2, 0, totalCols,
 		&sheets.CellFormat{
-			BackgroundColor: lightGreen,
-			TextFormat:      &sheets.TextFormat{Bold: true, FontSize: 8},
-			TextRotation:    &sheets.TextRotation{Angle: 90},
+			BackgroundColor:     lightGreen,
+			TextFormat:          &sheets.TextFormat{Bold: true, FontSize: 8},
+			TextRotation:        &sheets.TextRotation{Angle: 90},
 			HorizontalAlignment: "CENTER",
 			VerticalAlignment:   "BOTTOM",
 		},
@@ -349,7 +355,7 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		"userEnteredFormat(numberFormat,backgroundColor)"))
 
 	// Per-column number formats, derived from indicator precision in
-	// IndicatorMeta. Each data column (1..40) gets its own format request so
+	// IndicatorMeta. Each data column (1..41) gets its own format request so
 	// ratios/per-share amounts no longer leak shopspring's 16-digit division
 	// output into the rendered sheet.
 	for col := 1; col <= len(monitoringColumns); col++ {
@@ -373,11 +379,11 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 	// narrow for empty/nil columns, default 35px for small decimals.
 	monColWidths := map[int64]int64{
 		0: 65, 1: 75, 2: 40, 3: 75, 4: 50, 5: 55, 6: 50, 7: 60, // Date..MTLRECT
-		9: 30, 11: 50, 12: 50,                                     // RegPrice, Dividends
-		13: 22, 14: 22, 19: 22, 20: 22,                            // empty cols
-		21: 50, 22: 55, 23: 30, 24: 50, 27: 50, 40: 50,           // large-number cols
-		28: 22, 29: 22, 31: 22, 32: 22,                            // empty cols
-		35: 22, 36: 22, 37: 22, 38: 22, 39: 22,                   // empty cols
+		9: 30, 11: 50, 12: 50, // RegPrice, Dividends
+		13: 22, 14: 22, 19: 22, 20: 22, // empty cols
+		21: 50, 22: 55, 23: 30, 24: 50, 27: 50, 41: 50, // large-number cols (I62 at 41)
+		28: 22, 29: 22, 31: 22, 32: 22, // empty cols
+		35: 22, 36: 22, 37: 22, 38: 22, 39: 22, 40: 22, // empty cols (40 = deprecated MTLAP slot)
 	}
 	for col := range int64(totalCols) {
 		px := int64(35)

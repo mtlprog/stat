@@ -54,10 +54,7 @@ func NewAssetInfo(code, issuer string) AssetInfo {
 // IssuerAddress is the Stellar address of the main fund issuer.
 const IssuerAddress = "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"
 
-// MTLAPAddress is the Stellar address of the Montelibero Association issuer.
-const MTLAPAddress = "GCNVDZIHGX473FEI7IXCUAEXUJ4BGCKEMHF36VYP5EMS7PX2QBLAMTLA"
-
-// eurmtlAsset, xlmAsset and mtlapAsset are unexported to prevent external mutation.
+// eurmtlAsset and xlmAsset are unexported to prevent external mutation.
 var (
 	eurmtlAsset = AssetInfo{
 		Code:   "EURMTL",
@@ -68,11 +65,6 @@ var (
 		Code: "XLM",
 		Type: AssetTypeNative,
 	}
-	mtlapAsset = AssetInfo{
-		Code:   "MTLAP",
-		Issuer: MTLAPAddress,
-		Type:   AssetTypeCreditAlphanum12,
-	}
 )
 
 // EURMTLAsset returns the fund's base asset (EUR-pegged stablecoin).
@@ -80,6 +72,3 @@ func EURMTLAsset() AssetInfo { return eurmtlAsset }
 
 // XLMAsset returns the Stellar native asset info.
 func XLMAsset() AssetInfo { return xlmAsset }
-
-// MTLAPAsset returns the Montelibero Association participation token asset.
-func MTLAPAsset() AssetInfo { return mtlapAsset }

@@ -9,14 +9,15 @@ import (
 
 // Config holds all application configuration loaded from environment variables.
 type Config struct {
-	HorizonURL            string
-	DatabaseURL           string
-	CoinGeckoURL          string
-	HorizonRetryMax       int
-	HorizonRetryBaseDelay time.Duration
-	CoinGeckoDelay        time.Duration
-	CoinGeckoRetryMax     int
-	HTTPPort              string
+	HorizonURL                string
+	DatabaseURL               string
+	CoinGeckoURL              string
+	StellarExpertURL          string
+	HorizonRetryMax           int
+	HorizonRetryBaseDelay     time.Duration
+	CoinGeckoDelay            time.Duration
+	CoinGeckoRetryMax         int
+	HTTPPort                  string
 	GoogleSheetsSpreadsheetID string
 	GoogleCredentialsJSON     string
 }
@@ -27,6 +28,7 @@ func Load() Config {
 		HorizonURL:                envOrDefault("HORIZON_URL", "https://horizon.stellar.org"),
 		DatabaseURL:               envOrDefaultWarn("DATABASE_URL", ""),
 		CoinGeckoURL:              envOrDefault("COINGECKO_URL", "https://api.coingecko.com/api/v3"),
+		StellarExpertURL:          envOrDefault("STELLAR_EXPERT_URL", "https://api.stellar.expert"),
 		HorizonRetryMax:           envOrDefaultInt("HORIZON_RETRY_MAX", 5),
 		HorizonRetryBaseDelay:     envOrDefaultDuration("HORIZON_RETRY_BASE_DELAY", 2*time.Second),
 		CoinGeckoDelay:            envOrDefaultDuration("COINGECKO_DELAY", 6*time.Second),

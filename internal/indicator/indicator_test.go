@@ -17,7 +17,6 @@ func TestRegistryExecutionOrder(t *testing.T) {
 	registry.Register(&Layer1Calculator{})
 	registry.Register(&Layer0Calculator{})
 	registry.Register(&DividendCalculator{})
-	registry.Register(&AnalyticsCalculator{})
 	registry.Register(&TokenomicsCalculator{})
 
 	data := testFundStructureData()

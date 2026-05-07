@@ -125,131 +125,6 @@ func TestFetchPriceYearAgoReturnsZeroWhenAllSourcesEmpty(t *testing.T) {
 	}
 }
 
-// fetchMonthlyDividends12m: every month falls back to I11 from the indicator
-// repo when no snapshot is available.
-func TestFetchMonthlyDividends12mUsesIndicatorRepoForMissingMonths(t *testing.T) {
-	snapRepo := &stubSnapshotRepo{notFound: true}
-	indRepo := &stubIndicatorRepoForDividend{
-		history: constantHistory(11, "2926", 13),
-	}
-	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
-
-	got, err := fetchMonthlyDividends12m(context.Background(), hist)
-	if err != nil {
-		t.Fatalf("fetchMonthlyDividends12m: %v", err)
-	}
-	if len(got) != 12 {
-		t.Fatalf("len = %d, want 12 months filled from indicator repo", len(got))
-	}
-	for i, v := range got {
-		if !v.Equal(decimal.RequireFromString("2926")) {
-			t.Errorf("month %d = %s, want 2926", i, v)
-		}
-	}
-}
-
-// Mixed-source: snapshot covers recent months (LiveMetrics era), indicator
-// repo covers older months. Realistic production state for the next ~6
-// months after the LiveMetrics rollout.
-func TestFetchMonthlyDividends12mMixedSnapshotAndRepo(t *testing.T) {
-	now := time.Now().UTC()
-	livePeriodCutoff := now.AddDate(0, -6, 0)
-	snapRepo := &stubSnapshotRepo{
-		dateFunc: func(target time.Time) (*snapshot.Snapshot, error) {
-			if target.Before(livePeriodCutoff) {
-				return nil, snapshot.ErrNotFound
-			}
-			liveStr := "1500"
-			return makeSnap(t, domain.FundStructureData{
-				LiveMetrics: &domain.FundLiveMetrics{MonthlyDividends: &liveStr},
-			}), nil
-		},
-	}
-	indRepo := &stubIndicatorRepoForDividend{
-		history: constantHistory(11, "2926", 13),
-	}
-	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
-
-	got, err := fetchMonthlyDividends12m(context.Background(), hist)
-	if err != nil {
-		t.Fatalf("fetchMonthlyDividends12m: %v", err)
-	}
-	if len(got) != 12 {
-		t.Fatalf("len = %d, want 12", len(got))
-	}
-	var snapCount, repoCount int
-	for _, v := range got {
-		switch v.String() {
-		case "1500":
-			snapCount++
-		case "2926":
-			repoCount++
-		default:
-			t.Errorf("unexpected value: %s", v)
-		}
-	}
-	if snapCount == 0 || repoCount == 0 {
-		t.Errorf("want a mix of snapshot+repo values; got snap=%d repo=%d", snapCount, repoCount)
-	}
-}
-
-// A genuine zero in the snapshot LiveMetrics is a real data point — it must
-// be appended, not silently dropped via a "0 means missing" coincidence.
-func TestFetchMonthlyDividends12mPreservesGenuineZeroFromSnapshot(t *testing.T) {
-	zero := "0"
-	snapRepo := &stubSnapshotRepo{
-		nearest: makeSnap(t, domain.FundStructureData{
-			LiveMetrics: &domain.FundLiveMetrics{MonthlyDividends: &zero},
-		}),
-	}
-	// Indicator repo has a non-zero value — must NOT be used as a substitute,
-	// because the snapshot answered authoritatively with zero.
-	indRepo := &stubIndicatorRepoForDividend{
-		history: constantHistory(11, "9999", 13),
-	}
-	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
-
-	got, err := fetchMonthlyDividends12m(context.Background(), hist)
-	if err != nil {
-		t.Fatalf("fetchMonthlyDividends12m: %v", err)
-	}
-	if len(got) != 12 {
-		t.Fatalf("len = %d, want 12 (zeros preserved)", len(got))
-	}
-	for i, v := range got {
-		if !v.IsZero() {
-			t.Errorf("month %d = %s, want 0 (snapshot zero preserved over repo 9999)", i, v)
-		}
-	}
-}
-
-// Snapshot DB error during the per-month walk must propagate, not silently
-// fall back to indicator-repo (CLAUDE.md non-conflation rule).
-func TestFetchMonthlyDividends12mPropagatesSnapshotDBError(t *testing.T) {
-	snapRepo := &stubSnapshotRepo{err: errors.New("conn lost")}
-	indRepo := &stubIndicatorRepoForDividend{history: constantHistory(11, "2926", 13)}
-	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
-
-	_, err := fetchMonthlyDividends12m(context.Background(), hist)
-	if err == nil {
-		t.Fatal("fetchMonthlyDividends12m err=nil, want error on snapshot DB failure")
-	}
-}
-
-// Indicator-repo GetHistory error must propagate, not be silently treated
-// as "no history" — that would conflate infrastructure failure with data
-// absence.
-func TestFetchMonthlyDividends12mPropagatesIndicatorRepoError(t *testing.T) {
-	snapRepo := &stubSnapshotRepo{notFound: true}
-	indRepo := &stubIndicatorRepoForDividend{historyErr: errors.New("conn lost")}
-	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
-
-	_, err := fetchMonthlyDividends12m(context.Background(), hist)
-	if err == nil {
-		t.Fatal("fetchMonthlyDividends12m err=nil, want error on indicator-repo failure")
-	}
-}
-
 // lookupIndicatorAt with no repository wired must return zero, not panic
 // or error — that's "not configured", indistinguishable from "no data".
 func TestLookupIndicatorAtNilGuards(t *testing.T) {
@@ -277,14 +152,14 @@ func TestLookupIndicatorAtRepoErrorPropagates(t *testing.T) {
 	}
 }
 
-// End-to-end: DividendCalculator.Calculate produces non-zero I16/I17/I55
-// when only the indicator-repo path is available — the headline regression
-// the PR is meant to fix.
+// End-to-end: DividendCalculator.Calculate produces non-zero I17 / I43 / I55
+// when only the indicator-repo path is available for I55 — the headline
+// regression this guards against is silent-zero ROI when snapshots predate
+// the LiveMetrics rollout.
 func TestDividendCalculatorEndToEndUsesIndicatorRepoForI55(t *testing.T) {
 	snapRepo := &stubSnapshotRepo{notFound: true}
 	indRepo := &stubIndicatorRepoForDividend{
-		byID:    map[int]Indicator{10: {ID: 10, Value: decimal.RequireFromString("6.28")}},
-		history: constantHistory(11, "2440.7", 13),
+		byID: map[int]Indicator{10: {ID: 10, Value: decimal.RequireFromString("6.28")}},
 	}
 	hist := &HistoricalData{Repo: snapRepo, IndicatorRepo: indRepo, Slug: "mtlf"}
 
@@ -311,20 +186,20 @@ func TestDividendCalculatorEndToEndUsesIndicatorRepoForI55(t *testing.T) {
 	if by[55].IsZero() {
 		t.Errorf("I55 = 0, want non-zero (indicator-repo fallback should resolve year-ago price)")
 	}
-	if by[16].IsZero() {
-		t.Errorf("I16 = 0, want non-zero")
-	}
 	if by[17].IsZero() {
 		t.Errorf("I17 = 0, want non-zero")
 	}
+	if by[43].IsZero() {
+		t.Errorf("I43 = 0, want non-zero")
+	}
 	// Display precision contract: percentages/ratios at 2 decimals, per-share
 	// amounts at 4 decimals (rounding per-share to hundredths zeros them out).
-	for _, id := range []int{16, 17, 34} {
+	for _, id := range []int{17, 34, 43} {
 		if by[id].Exponent() < -2 {
 			t.Errorf("I%d = %s, want exponent ≥ -2 (ratio rounded to hundredths)", id, by[id])
 		}
 	}
-	for _, id := range []int{15, 33, 54} {
+	for _, id := range []int{15, 54} {
 		if by[id].Exponent() < -4 {
 			t.Errorf("I%d = %s, want exponent ≥ -4 (per-share rounded to ten-thousandths)", id, by[id])
 		}
@@ -357,22 +232,6 @@ func makeSnap(t *testing.T, data domain.FundStructureData) *snapshot.Snapshot {
 		t.Fatalf("marshal: %v", err)
 	}
 	return &snapshot.Snapshot{Data: raw}
-}
-
-// constantHistory returns count monthly HistoryPoints for indicator id, all
-// with the given decimal value, oldest first (matching GetHistory's ASC ordering).
-func constantHistory(id int, value string, count int) []HistoryPoint {
-	now := time.Now().UTC()
-	v := decimal.RequireFromString(value)
-	pts := make([]HistoryPoint, count)
-	for i := range count {
-		pts[i] = HistoryPoint{
-			SnapshotDate: now.AddDate(0, -(count - i), 0),
-			IndicatorID:  id,
-			Value:        v,
-		}
-	}
-	return pts
 }
 
 // --- mocks ---

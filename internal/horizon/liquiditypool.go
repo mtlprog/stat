@@ -41,4 +41,3 @@ func (c *Client) FetchLiquidityPools(ctx context.Context, reserveA, reserveB dom
 	}
 	return resp.Embedded.Records, nil
 }
-

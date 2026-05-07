@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sort"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/mtlprog/stat/internal/domain"
 	"github.com/mtlprog/stat/internal/horizon"
 	"github.com/mtlprog/stat/internal/indicator"
+	"github.com/mtlprog/stat/internal/stellarexpert"
 )
 
 // fundSlug is the entity slug used by the report flow. Lives here because the
@@ -30,12 +32,18 @@ type Horizon interface {
 	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
 	FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) ([]string, error)
 	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
-	FetchEURMTLPaymentVolume(ctx context.Context, since time.Time) (decimal.Decimal, error)
 }
 
 // PriceSource provides market price lookups.
 type PriceSource interface {
 	GetAverageTradePrice(ctx context.Context, base, counter domain.AssetInfo, limit int) (decimal.Decimal, error)
+}
+
+// PaymentStatsSource provides daily and cumulative EURMTL payment volume —
+// the data backing I25 and I26. The production implementation hits
+// stellar.expert's pre-aggregated /stats-history endpoint; tests pass a stub.
+type PaymentStatsSource interface {
+	FetchEURMTLPaymentStats(ctx context.Context, date time.Time) (stellarexpert.Stats, error)
 }
 
 // tradesAvgWindow is the number of most-recent trades averaged to produce
@@ -49,23 +57,25 @@ const tradesAvgWindow = 100
 type Service struct {
 	horizon   Horizon
 	price     PriceSource
+	expert    PaymentStatsSource
 	indicator indicator.Repository
 	fundAddrs []string
 }
 
 // NewService creates a new metrics Service. indicatorRepo is required for the
-// sticky-fallback path (reusing the prior day's value when a fetch fails) and
-// for the I26 incremental computation; passing nil disables both behaviours.
-func NewService(h Horizon, p PriceSource, indicatorRepo indicator.Repository, fundAddrs []string) *Service {
+// sticky-fallback path (reusing the prior day's value when a fetch fails);
+// passing nil disables it.
+func NewService(h Horizon, p PriceSource, expert PaymentStatsSource, indicatorRepo indicator.Repository, fundAddrs []string) *Service {
 	return &Service{
 		horizon:   h,
 		price:     p,
+		expert:    expert,
 		indicator: indicatorRepo,
 		fundAddrs: fundAddrs,
 	}
 }
 
-// EnrichMetrics computes all live indicators (I6, I7, I10, I11, I23-I27, I40, I49)
+// EnrichMetrics computes all live indicators (I6, I7, I10, I11, I23-I27, I49, I62)
 // for the snapshot dated `date` and stores them in data.LiveMetrics. On any
 // fetch failure it logs an error and falls back to the prior day's persisted
 // value, never zero.
@@ -75,7 +85,6 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 
 	mtlAsset := domain.NewAssetInfo("MTL", domain.IssuerAddress)
 	mtlrectAsset := domain.NewAssetInfo("MTLRECT", domain.IssuerAddress)
-	mtlapAsset := domain.MTLAPAsset()
 	eurmtlAsset := domain.EURMTLAsset()
 
 	stage := func(name string) func() {
@@ -119,30 +128,15 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	}
 	done()
 
-	// I40: count of MTLAP holders with balance ≥1. /assets `accounts.authorized`
-	// for MTLAP returns ~1 because most holders are AUTHORIZED_TO_MAINTAIN_LIABILITIES,
-	// not authorized — so we have to walk and apply the balance filter.
-	done = stage("MTLAP_holders")
-	{
-		stepCtx, cancel := withStepTimeout(ctx)
-		minOne := decimal.NewFromInt(1)
-		if count, err := s.horizon.FetchAssetHolderCountByBalance(stepCtx, mtlapAsset, minOne); err != nil {
-			slog.Error("metrics: fetch MTLAP holders failed, reusing prior I40", "error", err)
-			m.MTLAPHolders = pickPrior(prev, 40)
-		} else {
-			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(count)).String())
-		}
-		cancel()
-	}
-	done()
-
 	done = stage("MTL_MTLRECT_shareholders_walk")
-	merged, count, median, shareholdersOK := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset)
+	merged, stats, shareholdersOK := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset)
 	if shareholdersOK {
-		m.MTLShareholders = ptr(decimal.NewFromInt(int64(count)).String())
-		m.MTLShareholdersMedian = ptr(median.String())
+		m.MTLShareholders = ptr(decimal.NewFromInt(int64(stats.countAtLeastOne)).String())
+		m.MTLShareholdersAny = ptr(decimal.NewFromInt(int64(stats.countAny)).String())
+		m.MTLShareholdersMedian = ptr(stats.median.String())
 	} else {
 		m.MTLShareholders = pickPrior(prev, 27)
+		m.MTLShareholdersAny = pickPrior(prev, 62)
 		m.MTLShareholdersMedian = pickPrior(prev, 23)
 	}
 	done()
@@ -180,17 +174,30 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	}
 	done()
 
-	done = stage("eurmtl_daily_volume")
-	dailyVol, dailyOK := s.fetchDailyVolume(ctx, date)
-	if dailyOK {
-		m.EURMTLDailyVolume = ptr(dailyVol.String())
-	} else {
-		m.EURMTLDailyVolume = pickPrior(prev, 25)
+	// I25 (daily) and I26 (cumulative) come from a single call to
+	// stellar.expert's pre-aggregated /stats-history. Falls back to the prior
+	// day's persisted values on any failure — including ErrNoDailyEntry, which
+	// fires when stellar.expert hasn't ingested today yet.
+	done = stage("eurmtl_payment_stats")
+	{
+		stepCtx, cancel := withStepTimeout(ctx)
+		stats, err := s.expert.FetchEURMTLPaymentStats(stepCtx, date)
+		cancel()
+		switch {
+		case err == nil:
+			m.EURMTLDailyVolume = ptr(stats.Daily.String())
+			m.EURMTLPaymentTotal = ptr(stats.Cumulative.String())
+		case errors.Is(err, stellarexpert.ErrNoDailyEntry):
+			slog.Info("metrics: stellar.expert has no entry for today yet, reusing prior I25/I26",
+				"date", date.Format("2006-01-02"))
+			m.EURMTLDailyVolume = pickPrior(prev, 25)
+			m.EURMTLPaymentTotal = pickPrior(prev, 26)
+		default:
+			slog.Error("metrics: fetch stellar.expert stats failed, reusing prior I25/I26", "error", err)
+			m.EURMTLDailyVolume = pickPrior(prev, 25)
+			m.EURMTLPaymentTotal = pickPrior(prev, 26)
+		}
 	}
-	done()
-
-	done = stage("i26_incremental")
-	m.EURMTL30dVolume = s.computeI26(ctx, date, dailyVol, dailyOK, prev)
 	done()
 
 	done = stage("MTL_trades_avg")
@@ -267,30 +274,38 @@ func (s *Service) fetchCirculation(ctx context.Context, asset domain.AssetInfo) 
 	return c, true
 }
 
-// fetchShareholderStats walks all MTL and MTLRECT holders with balance ≥1 and
-// returns the merged per-account balance map together with the count and
-// median per-holder total. The merged map is also used downstream to compute
-// I18 (intersection with EURMTL trustline holders). Each per-asset sweep gets
-// its own step timeout so the slower side can't drag the report past its
-// overall budget; either failure aborts to ok=false and the caller falls back
-// to the prior day's persisted I27 / I23 / I18.
-func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAsset domain.AssetInfo) (map[string]decimal.Decimal, int, decimal.Decimal, bool) {
-	minOne := decimal.NewFromInt(1)
+// shareholderStats bundles the two holder counts and the median per-holder
+// total derived from a single MTL+MTLRECT walk.
+type shareholderStats struct {
+	countAtLeastOne int             // I27: holders with combined MTL+MTLRECT ≥ 1
+	countAny        int             // I62: holders with any positive combined balance (≥ 1 stroop)
+	median          decimal.Decimal // I23: median per-holder combined balance, ≥1 cohort
+}
+
+// fetchShareholderStats walks all MTL and MTLRECT holders with any positive
+// balance and returns the merged per-account balance map plus counts at two
+// thresholds (≥1 for I27 / I23, >0 for I62). The merged map is reused
+// downstream to compute I18 (intersection with EURMTL trustline holders).
+// Each per-asset sweep gets its own step timeout so the slower side can't
+// drag the report past its overall budget; either failure aborts to ok=false
+// and the caller falls back to the prior day's persisted I27 / I23 / I18 / I62.
+func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAsset domain.AssetInfo) (map[string]decimal.Decimal, shareholderStats, bool) {
+	minNonZero := decimal.New(1, -7)
 
 	mtlCtx, mtlCancel := withStepTimeout(ctx)
 	defer mtlCancel()
-	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlCtx, mtlAsset, minOne)
+	mtl, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlCtx, mtlAsset, minNonZero)
 	if err != nil {
 		slog.Error("metrics: fetch MTL holders failed", "error", err)
-		return nil, 0, decimal.Zero, false
+		return nil, shareholderStats{}, false
 	}
 
 	mtlrectCtx, mtlrectCancel := withStepTimeout(ctx)
 	defer mtlrectCancel()
-	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlrectCtx, mtlrectAsset, minOne)
+	mtlrect, err := s.horizon.FetchAssetHolderBalancesByBalance(mtlrectCtx, mtlrectAsset, minNonZero)
 	if err != nil {
 		slog.Error("metrics: fetch MTLRECT holders failed", "error", err)
-		return nil, 0, decimal.Zero, false
+		return nil, shareholderStats{}, false
 	}
 
 	merged := make(map[string]decimal.Decimal, len(mtl)+len(mtlrect))
@@ -301,11 +316,18 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 		merged[id] = merged[id].Add(bal)
 	}
 
-	values := make([]decimal.Decimal, 0, len(merged))
+	one := decimal.NewFromInt(1)
+	atLeastOne := make([]decimal.Decimal, 0, len(merged))
 	for _, bal := range merged {
-		values = append(values, bal)
+		if bal.GreaterThanOrEqual(one) {
+			atLeastOne = append(atLeastOne, bal)
+		}
 	}
-	return merged, len(merged), median(values), true
+	return merged, shareholderStats{
+		countAtLeastOne: len(atLeastOne),
+		countAny:        len(merged),
+		median:          median(atLeastOne),
+	}, true
 }
 
 // computeI18 counts shareholders (MTL+MTLRECT sum > 1) who also hold an EURMTL
@@ -385,75 +407,6 @@ func (s *Service) computeI11(ctx context.Context, prev map[int]indicator.Indicat
 		}
 	}
 	return ptr(total.String())
-}
-
-// fetchDailyVolume returns total EURMTL payment volume in the 24h window
-// preceding `date`. Wrapped in stepTimeout because the underlying /payments
-// endpoint can paginate through thousands of pages on busy days.
-func (s *Service) fetchDailyVolume(ctx context.Context, date time.Time) (decimal.Decimal, bool) {
-	stepCtx, cancel := withStepTimeout(ctx)
-	defer cancel()
-	since := date.AddDate(0, 0, -1)
-	vol, err := s.horizon.FetchEURMTLPaymentVolume(stepCtx, since)
-	if err != nil {
-		slog.Error("metrics: fetch EURMTL daily volume failed", "error", err)
-		return decimal.Zero, false
-	}
-	return vol, true
-}
-
-// computeI26 produces the rolling 30-day EURMTL volume by subtracting the
-// daily volume from 30 days ago and adding today's. Falls back to yesterday's
-// persisted I26 when today's daily fetch failed or the 30-day-ago snapshot is
-// missing.
-//
-// Cold-start caveat: if both today's daily fetch failed AND no prior I26
-// exists in the DB, the function returns nil and the calculator resolves I26
-// to zero. This path is not expected in production (the prod DB is fully
-// seeded) and intentionally fails loud rather than fabricate a value.
-func (s *Service) computeI26(ctx context.Context, date time.Time, dailyVol decimal.Decimal, dailyOK bool, prev map[int]indicator.Indicator) *string {
-	yesterday30d := pickPrior(prev, 26)
-	if !dailyOK || yesterday30d == nil {
-		if yesterday30d == nil {
-			slog.Error("metrics: no prior I26 in DB, skipping incremental — calculator will see 0",
-				"dailyOK", dailyOK)
-		}
-		return yesterday30d
-	}
-
-	thirtyDayHist := s.lookup(ctx, 25, date.AddDate(0, 0, -30))
-	if thirtyDayHist == nil {
-		slog.Error("metrics: no I25 from 30 days ago, reusing prior I26", "target", date.AddDate(0, 0, -30).Format("2006-01-02"))
-		return yesterday30d
-	}
-
-	prevVal := domain.SafeParse(*yesterday30d)
-	out := prevVal.Add(dailyVol).Sub(*thirtyDayHist)
-	if out.IsNegative() {
-		out = decimal.Zero
-	}
-	return ptr(out.String())
-}
-
-// lookup returns indicator `id` at-or-before `target` from the repository,
-// or nil if missing.
-func (s *Service) lookup(ctx context.Context, id int, target time.Time) *decimal.Decimal {
-	if s.indicator == nil {
-		return nil
-	}
-	res, err := s.indicator.GetNearestBefore(ctx, fundSlug, target)
-	if err != nil {
-		slog.Error("metrics: lookup historical indicator failed", "id", id, "target", target.Format("2006-01-02"), "error", err)
-		return nil
-	}
-	if res == nil {
-		return nil
-	}
-	ind, ok := res[id]
-	if !ok {
-		return nil
-	}
-	return &ind.Value
 }
 
 // pickPrior returns the prior day's value for the given indicator ID as a
