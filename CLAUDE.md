@@ -69,6 +69,7 @@ There is no `internal/worker` package; all scheduling is external.
 - Calculation is a layered DAG: `Layer0 → Layer1 → Layer2 → Dividend / Analytics / Tokenomics`.
 - Each `Calculator` declares `IDs()` and `Dependencies()`; `Registry.CalculateAll` resolves order via topological sort.
 - To add a new calculator: implement `Calculator` interface, define its Horizon interface in the same file, register in `service.go`, extend `IndicatorHorizon` if it needs `horizon.Client`.
+- **I25 / I26 source is `internal/stellarexpert`, not Horizon.** Daily and cumulative EURMTL payment volume come from a single GET to stellar.expert's `/explorer/public/asset/EURMTL-…-2/stats-history` (`payments_amount` per row in stroops, ascending by `ts`). One HTTP call replaces a 30+-minute Horizon `/payments` pagination walk. Don't add code that re-walks /payments for these indicators.
 
 ### Snapshot Data Model
 - `fund_snapshots.data` (JSONB) stores `domain.FundStructureData` with per-account token balances and prices.
@@ -99,6 +100,7 @@ There is no `internal/worker` package; all scheduling is external.
 - Use `decimal.New(1, -7)` for exact stroop thresholds — avoid `decimal.NewFromFloat` for precision-sensitive values.
 - Asset type is determined by code length: `<=4` chars → `credit_alphanum4`, `5-12` chars → `credit_alphanum12`. Use `domain.AssetTypeFromCode()`.
 - `decimal.Div`/`Mul` keep shopspring's default 16-digit precision. Computed amounts/prices that flow into indicators or LiveMetrics must be `.Round(7)`-ed (half-away-from-zero, matches the Stellar protocol and Horizon's `bid.price`/`ask.price` output) — see `price.stellarPrecision` for the canonical constant.
+- stellar.expert's `payments_amount` (and similar per-asset aggregates) is also stroops — decode as `json.Number` → `decimal.NewFromString` → `Shift(-7)` to recover the EURMTL amount.
 
 ## Horizon API Patterns
 
@@ -130,6 +132,7 @@ path = u.Path + "?" + u.RawQuery
 - Use **Debug / Info / Error only** — never `slog.Warn`. Warn is ambiguous; ops can't tell whether to act. Map: Debug = noisy diagnostic; Info = "happened, FYI" (data absence noted, system continues); Error = needs intervention or propagate as a returned error so the caller fails loud. Balance/parse errors that mask data → Error; cascade visibility for an already-logged Error → Info.
 - When one failed API call cascades to zero out multiple indicators, log the cascade explicitly (which indicators are affected and why).
 - Always distinguish `snapshot.ErrNotFound` from real DB errors using `errors.Is(err, snapshot.ErrNotFound)` — never conflate "not found" with connection/query failures (see `runImport` pattern). Real DB errors must **propagate up** through the calculator's error return, not silently fall back to an alternate source — that would mask infrastructure outages as data absence.
+- Treat `stellarexpert.ErrNoDailyEntry` like `snapshot.ErrNotFound`: it means "no data for this exact date" and is a sticky-fallback signal, never a wrapper for transport / decode / staleness errors. Empty payloads, stale-only datasets, and out-of-range targets must propagate as real errors so the operator sees them.
 - Long loops over dates/snapshots must have a circuit breaker (`maxConsecutiveErrors = 5`) to abort on persistent failures — never silently iterate through hundreds of errors.
 
 ## Local Development with Docker
@@ -141,6 +144,9 @@ path = u.Path + "?" + u.RawQuery
 - `docker compose up -d db` starts just PostgreSQL; `docker compose run --rm` for one-shot commands.
 - For `import-excel` with a local file: `docker compose run --rm -v "$(pwd)/MTL_report_1.xlsx:/app/MTL_report_1.xlsx" --entrypoint "./stat" app import-excel --file MTL_report_1.xlsx`
 - Read-only prod-DB audit (fish-friendly): `dotenv run -- bash -c 'psql "$DATABASE_URL" -c "SELECT …"'`. Plain `dotenv run -- psql "$DATABASE_URL"` fails because fish interpolates `$DATABASE_URL` before dotenv loads it — wrap in `bash -c '…'` to defer expansion.
+
+### One-off prod data fixes
+Prefer a `psql` UPSERT in a transaction over building a Go subcommand when the number already lives in an external source (e.g. stellar.expert's pre-aggregated fields). The UPSERT must mirror `indicator.PgRepository.Save`: `INSERT … ON CONFLICT (entity_id, snapshot_date, indicator_id) DO UPDATE SET value = EXCLUDED.value, computed_at = NOW()`. Wrap in `BEGIN; … COMMIT;` and run via `dotenv run -- bash -c 'psql "$DATABASE_URL" -f /tmp/fix.sql'`.
 
 ### Excel Import (`import-excel`)
 - Uses `github.com/xuri/excelize/v2` to read the MONITORING sheet from an `.xlsx` file.
