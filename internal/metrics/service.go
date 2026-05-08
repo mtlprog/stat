@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -30,9 +31,15 @@ type Horizon interface {
 	FetchAssetStats(ctx context.Context, asset domain.AssetInfo) (horizon.AssetStats, error)
 	FetchAssetHolderCountByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (int, error)
 	FetchAssetHolderBalancesByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) (map[string]decimal.Decimal, error)
-	FetchAssetHolderIDsByBalance(ctx context.Context, asset domain.AssetInfo, minBalance decimal.Decimal) ([]string, error)
-	FetchMonthlyEURMTLOutflow(ctx context.Context, accountID string, fundAddresses []string) (decimal.Decimal, error)
+	FetchDividendActivity(ctx context.Context, distributor string, fundAddresses []string, since time.Time) (horizon.DividendActivity, error)
+	FetchAccountDataEntry(ctx context.Context, accountID, key string) (string, bool, error)
 }
+
+// dividendLookbackWindow caps how far back the live path scans for the most
+// recent dividend event. The fund cadence is monthly; 3 months is generous
+// enough that even a multi-cycle gap won't fall through to the sticky-fallback
+// path while keeping the per-snapshot Horizon walk bounded.
+const dividendLookbackWindow = 90 * 24 * time.Hour
 
 // PriceSource provides market price lookups.
 type PriceSource interface {
@@ -147,7 +154,7 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	done()
 
 	done = stage("MTL_MTLRECT_shareholders_walk")
-	merged, stats, shareholdersOK := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset)
+	_, stats, shareholdersOK := s.fetchShareholderStats(ctx, mtlAsset, mtlrectAsset)
 	if shareholdersOK {
 		m.MTLShareholders = ptr(decimal.NewFromInt(int64(stats.countAtLeastOne)).String())
 		m.MTLShareholdersAny = ptr(decimal.NewFromInt(int64(stats.countAny)).String())
@@ -159,36 +166,22 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	}
 	done()
 
-	// I18: shareholders (MTL+MTLRECT > 1) who also hold a non-zero EURMTL trustline.
-	// Reuses the merged map from the I27 walk to avoid a second MTL/MTLRECT
-	// pagination round-trip; only the EURMTL ID list is fetched here.
-	done = stage("EURMTL_shareholders_intersection")
-	if shareholdersOK {
-		if i18, ok := s.computeI18(ctx, eurmtlAsset, merged); ok {
-			m.EURMTLShareholders = ptr(decimal.NewFromInt(int64(i18)).String())
+	// I11 + I18 are derived from the latest dividend event from the canonical
+	// distributor (domain.MTLDividendDistributor) at-or-before `date`. Between
+	// events both numbers stay sticky to prior — the indicator changes
+	// instantaneously the day a distribution lands, then holds. Per the spec,
+	// I18 (recipients) is expected to closely match I27 (≥1-share holders)
+	// because the oferta is one-recipient-per-shareholder.
+	done = stage("dividends_walk")
+	{
+		i11Str, i18Count, divOK := s.computeDividendActivity(ctx, date, prev)
+		m.MonthlyDividends = i11Str
+		if divOK {
+			m.EURMTLShareholders = ptr(decimal.NewFromInt(int64(i18Count)).String())
+			s.auditI18VsI27(i18Count, stats.countAtLeastOne, shareholdersOK)
 		} else {
 			m.EURMTLShareholders = pickPrior(prev, 18)
 		}
-	} else {
-		// Cascade: a failed shareholder walk (already logged at Error inside
-		// fetchShareholderStats) degrades I18, I23, I27, AND I62 simultaneously.
-		// Info-level surface so the second-order effect is visible without
-		// duplicating the upstream Error severity.
-		slog.Info("metrics: I18 falls back to prior because the shareholder walk failed upstream (cascade with I23, I27, I62)")
-		m.EURMTLShareholders = pickPrior(prev, 18)
-	}
-	done()
-
-	// I11: monthly dividend outflow summed across every fund account in
-	// `s.fundAddrs` (the full domain.AccountRegistry, no ordering). The 30-day
-	// rolling window means the value can legitimately go to zero on the last
-	// day a payment falls off — but the user's expectation is that I11 is a
-	// "last known monthly amount", monotonic between disbursements. So when
-	// the live sum is zero AND yesterday's persisted value was non-zero, we
-	// keep yesterday's value rather than write a zero.
-	done = stage("dividends_walk_all_accounts")
-	{
-		m.MonthlyDividends = s.computeI11(ctx, prev)
 	}
 	done()
 
@@ -353,83 +346,123 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 	}, true
 }
 
-// computeI18 counts shareholders (MTL+MTLRECT sum > 1) who also hold an EURMTL
-// trustline with a non-zero balance. Only the EURMTL ID list is fetched here;
-// the merged shareholder balances are reused from the prior I27 walk.
-func (s *Service) computeI18(ctx context.Context, eurmtlAsset domain.AssetInfo, merged map[string]decimal.Decimal) (int, bool) {
+// computeDividendActivity derives I11 and I18 from the canonical dividend
+// distributor (domain.MTLDividendDistributor):
+//
+//   - I11 = the value of the distributor's `LAST_DIVS` manage_data entry as of
+//     the most recent update at-or-before `date`. Authoritative — published
+//     by the fund's bot, includes both raw dividends and adjacent donate flow
+//     in one canonical "last distribution amount".
+//   - I18 = |distinct non-fund recipients| in the most recent memo-grouped
+//     "mtl div ..." payment batch at-or-before `date`. Memos are unique per
+//     distribution date so all the txs comprising one batch (Stellar caps at
+//     100 ops/tx, big batches split into multiple txs) collapse into one
+//     logical event.
+//
+// Both indicators snap on event and stay sticky between events. ok=false ⇒
+// Horizon error; caller sticky-falls back. ok=true with no recent event in the
+// lookback window ⇒ Info-logged sticky to prior.
+//
+// `date` matches the snapshot policy (midnight UTC of the report day); events
+// dated up to and including that UTC day count for the snapshot.
+func (s *Service) computeDividendActivity(ctx context.Context, date time.Time, prev map[int]indicator.Indicator) (*string, int, bool) {
 	stepCtx, cancel := withStepTimeout(ctx)
 	defer cancel()
-	minNonZero := decimal.New(1, -7)
-	eurmtlIDs, err := s.horizon.FetchAssetHolderIDsByBalance(stepCtx, eurmtlAsset, minNonZero)
+	since := date.Add(-dividendLookbackWindow)
+	activity, err := s.horizon.FetchDividendActivity(stepCtx, domain.MTLDividendDistributor, s.fundAddrs, since)
 	if err != nil {
-		slog.Error("metrics: fetch EURMTL holder IDs failed, I18 falls back to prior", "error", err)
-		return 0, false
+		slog.Error("metrics: fetch dividend activity failed, I11 and I18 fall back to prior", "error", err)
+		return pickPrior(prev, 11), 0, false
 	}
 
-	// Strictly > 1, not ≥ 1, on purpose: the legacy Python rule was
-	// `mtl_mtlrect_balance > 1` (scripts/update_report.py
-	// calculate_statistics). I27 uses ≥ 1 because Horizon is queried per asset
-	// with minBalance=1 — that's a separate eligibility set. Don't unify them.
-	one := decimal.NewFromInt(1)
-	eligible := make(map[string]struct{}, len(merged))
-	for id, bal := range merged {
-		if bal.GreaterThan(one) {
-			eligible[id] = struct{}{}
+	cutoff := date.AddDate(0, 0, 1) // include events on the same UTC day as the snapshot
+
+	var latestUpdate *horizon.LastDivsUpdate
+	for i := range activity.LastDivsUpdates {
+		if activity.LastDivsUpdates[i].TS.Before(cutoff) {
+			latestUpdate = &activity.LastDivsUpdates[i]
+		}
+	}
+	var latestGroup *horizon.RecipientGroup
+	for i := range activity.RecipientGroups {
+		if activity.RecipientGroups[i].TS.Before(cutoff) {
+			latestGroup = &activity.RecipientGroups[i]
 		}
 	}
 
-	count := 0
-	for _, id := range eurmtlIDs {
-		if _, ok := eligible[id]; ok {
-			count++
+	// Live read of the current account.data["LAST_DIVS"] is always authoritative
+	// for "today" and saves the lookback walk from being deeper than necessary.
+	// Fall back to it only when the manage_data history walk didn't surface the
+	// most recent update (e.g. lookback window is shorter than time since last
+	// distribution and we missed the update entry).
+	if latestUpdate == nil {
+		if raw, present, derr := s.horizon.FetchAccountDataEntry(ctx, domain.MTLDividendDistributor, "LAST_DIVS"); derr == nil && present && raw != "" {
+			if v, perr := decimal.NewFromString(strings.TrimSpace(raw)); perr == nil {
+				return ptr(v.String()), recipientCountOrPrior(latestGroup, prev), true
+			}
 		}
 	}
-	return count, true
+
+	i11 := pickPrior(prev, 11)
+	if latestUpdate != nil {
+		i11 = ptr(latestUpdate.Value.String())
+	}
+	if latestUpdate == nil && latestGroup == nil {
+		slog.Info("metrics: no dividend activity within lookback window, I11/I18 sticky to prior",
+			"lookback_days", int(dividendLookbackWindow.Hours()/24))
+	}
+	return i11, recipientCountOrPrior(latestGroup, prev), true
 }
 
-// computeI11 sums monthly EURMTL dividend outflow across every fund account.
-// On any per-account walk failure the contribution is treated as zero (logged),
-// so a single Horizon hiccup doesn't poison the whole figure. If the final sum
-// is zero but the prior day had a non-zero I11, we keep yesterday's value —
-// the user-visible cell is meant to be "last known monthly dividend" and must
-// not flicker to zero between monthly disbursements.
-//
-// Trade-off: the rolling 30-day window means I11 can legitimately drop to zero
-// the day a payment falls off the window. Sticky-on-zero will mask that until
-// a new dividend is posted. Per-product requirement: never show a misleading
-// zero in MONITORING; reflect the last known value instead.
-func (s *Service) computeI11(ctx context.Context, prev map[int]indicator.Indicator) *string {
-	total := decimal.Zero
-	successCount := 0
-	for _, addr := range s.fundAddrs {
-		stepCtx, cancel := withStepTimeout(ctx)
-		amt, err := s.horizon.FetchMonthlyEURMTLOutflow(stepCtx, addr, s.fundAddrs)
-		cancel()
-		if err != nil {
-			slog.Error("metrics: fetch dividends from account failed, treating as zero contribution",
-				"account", addr, "error", err)
-			continue
-		}
-		successCount++
-		total = total.Add(amt)
+func recipientCountOrPrior(group *horizon.RecipientGroup, prev map[int]indicator.Indicator) int {
+	if group == nil {
+		return pickPriorInt(prev, 18)
 	}
+	return len(group.Recipients)
+}
 
-	// Distinguish "all walks failed" from "everyone really paid 0": the cascade
-	// is what an operator should see, not 11 individual ERROR lines plus a
-	// quiet sticky reuse.
-	if successCount == 0 && len(s.fundAddrs) > 0 {
-		slog.Error("metrics: all dividend account walks failed, I11 will fall back to prior",
-			"accounts", len(s.fundAddrs))
+// pickPriorInt is a small helper for callers that want the prior value of an
+// integer-valued indicator (counts) in int form, falling back to zero if the
+// prior set is missing or has no entry. Symmetric with pickPrior; lives here
+// to keep the dividend logic self-contained.
+func pickPriorInt(prev map[int]indicator.Indicator, id int) int {
+	if prev == nil {
+		return 0
 	}
+	ind, ok := prev[id]
+	if !ok {
+		return 0
+	}
+	return int(ind.Value.IntPart())
+}
 
-	if total.IsZero() {
-		if priorStr := pickPrior(prev, 11); priorStr != nil && !domain.SafeParse(*priorStr).IsZero() {
-			slog.Info("metrics: I11 live sum is zero, reusing prior (intentional sticky-on-zero)",
-				"prior", *priorStr)
-			return priorStr
-		}
+// auditI18VsI27 emits an Info-level audit log when I18 (dividend recipients)
+// diverges from I27 (≥1-share holders) by more than 5% — per the spec, оферта
+// guarantees these two should match. Divergence is a business signal of
+// distribution gaps, not an infrastructure failure (so Info, not Error). Skips
+// when shareholder stats are unavailable (i27OK=false), since the comparison
+// would be meaningless.
+const i18AuditDivergenceThreshold = 0.05
+
+func (s *Service) auditI18VsI27(i18, i27 int, i27OK bool) {
+	if !i27OK {
+		return
 	}
-	return ptr(total.String())
+	maxV := i18
+	if i27 > maxV {
+		maxV = i27
+	}
+	if maxV == 0 {
+		return
+	}
+	diff := i18 - i27
+	if diff < 0 {
+		diff = -diff
+	}
+	if float64(diff)/float64(maxV) > i18AuditDivergenceThreshold {
+		slog.Info("metrics: I18 diverges from I27 by >5% — possible dividend distribution gap",
+			"i18", i18, "i27", i27, "abs_diff", diff)
+	}
 }
 
 // pickPrior returns the prior day's value for the given indicator ID as a

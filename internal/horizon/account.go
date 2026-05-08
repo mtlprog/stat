@@ -2,6 +2,7 @@ package horizon
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 
 	"github.com/shopspring/decimal"
@@ -36,4 +37,24 @@ func (c *Client) FetchAccountBalance(ctx context.Context, accountID string, asse
 		}
 	}
 	return decimal.Zero, nil
+}
+
+// FetchAccountDataEntry reads `account.data[key]` from /accounts/{id} and
+// returns the base64-decoded UTF-8 value. Returns ("", true) when the entry
+// is absent (caller decides whether that's an error). Returns ("", false)
+// only when the HTTP fetch or decode fails.
+func (c *Client) FetchAccountDataEntry(ctx context.Context, accountID, key string) (string, bool, error) {
+	account, err := c.FetchAccount(ctx, accountID)
+	if err != nil {
+		return "", false, err
+	}
+	encoded, ok := account.Data[key]
+	if !ok || encoded == "" {
+		return "", true, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", false, fmt.Errorf("decoding data entry %s on %s: %w", key, accountID, err)
+	}
+	return string(raw), true, nil
 }

@@ -57,6 +57,13 @@ const IssuerAddress = "GACKTN5DAZGWXRWB2WLM6OPBDHAMT6SJNGLJZPQMEZBUR4JUGBX2UK7V"
 // MTLAPAddress is the Stellar address of the Montelibero Association issuer.
 const MTLAPAddress = "GCNVDZIHGX473FEI7IXCUAEXUJ4BGCKEMHF36VYP5EMS7PX2QBLAMTLA"
 
+// MTLDividendDistributor is the single Stellar address from which the fund
+// dispatches monthly MTL dividends as direct EURMTL payments. Each distribution
+// is one transaction whose memo starts with "mtl div " followed by a date —
+// I11 (sum) and I18 (|distinct recipients|) are derived from the latest such
+// transaction at-or-before the snapshot date and stay sticky between events.
+const MTLDividendDistributor = "GDNHQWZRZDZZBARNOH6VFFXMN6LBUNZTZHOKBUT7GREOWBTZI4FGS7IQ"
+
 // eurmtlAsset, xlmAsset and mtlapAsset are unexported to prevent external mutation.
 var (
 	eurmtlAsset = AssetInfo{

@@ -102,6 +102,11 @@ func main() {
 				Action: runBackfillIndicators,
 			},
 			{
+				Name:   "backfill-divs",
+				Usage:  "Recompute I11 (sum) and I18 (distinct recipients) from latest dividend event ≤ each snapshot date",
+				Action: runBackfillDivs,
+			},
+			{
 				Name:   "import-indicators-from-sheets",
 				Usage:  "Import historical indicator values from the MONITORING Google Sheets tab into fund_indicators",
 				Action: runImportIndicatorsFromSheets,
@@ -1193,6 +1198,127 @@ func runBackfillIndicators(c *cli.Context) error {
 	}
 
 	slog.Info("backfill complete", "processed", processed, "failed", failed, "total", len(metas))
+	return nil
+}
+
+// runBackfillDivs rewrites I11 (sum) and I18 (distinct recipient count) for
+// every stored snapshot date based on the canonical MTL dividend distributor
+// (domain.MTLDividendDistributor). Single descending walk on that account
+// gives all matching events; for each snapshot date we pick the latest event
+// at-or-before that date — same snap-on-event / sticky-between semantics the
+// live `stat report` job uses.
+//
+// Idempotent — re-runs are safe (UPSERT in indicator.PgRepository.Save).
+func runBackfillDivs(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	snapshotRepo := snapshot.NewPgRepository(pool)
+	indicatorRepo := indicator.NewPgRepository(pool)
+
+	entityID, err := snapshotRepo.EnsureEntity(ctx, "mtlf", "Montelibero Fund", "Montelibero Fund statistics")
+	if err != nil {
+		return fmt.Errorf("ensuring entity: %w", err)
+	}
+
+	metas, err := snapshotRepo.ListMeta(ctx, "mtlf")
+	if err != nil {
+		return fmt.Errorf("listing snapshot metadata: %w", err)
+	}
+	if len(metas) == 0 {
+		slog.Info("backfill-divs: no snapshots to process")
+		return nil
+	}
+	sort.Slice(metas, func(i, j int) bool { return metas[i].SnapshotDate.Before(metas[j].SnapshotDate) })
+
+	oldestDate := time.Date(metas[0].SnapshotDate.Year(), metas[0].SnapshotDate.Month(), metas[0].SnapshotDate.Day(), 0, 0, 0, 0, time.UTC)
+	// Walk one cycle earlier than the oldest snapshot so the very first
+	// snapshot can already pick up a "previous" dividend if one exists.
+	walkSince := oldestDate.AddDate(0, -2, 0)
+
+	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
+
+	var fundAddrs []string
+	for _, a := range domain.AccountRegistry() {
+		fundAddrs = append(fundAddrs, a.Address)
+	}
+
+	activity, err := horizonClient.FetchDividendActivity(ctx, domain.MTLDividendDistributor, fundAddrs, walkSince)
+	if err != nil {
+		return fmt.Errorf("walking dividend activity from %s: %w", domain.MTLDividendDistributor, err)
+	}
+	slog.Info("backfill-divs: dividend activity fetched",
+		"last_divs_updates", len(activity.LastDivsUpdates),
+		"recipient_groups", len(activity.RecipientGroups),
+		"since", walkSince.Format("2006-01-02"))
+
+	const maxConsecutiveErrors = 5
+	var processed, failed, consecutive int
+
+	for i, m := range metas {
+		date := time.Date(m.SnapshotDate.Year(), m.SnapshotDate.Month(), m.SnapshotDate.Day(), 0, 0, 0, 0, time.UTC)
+		cutoff := date.AddDate(0, 0, 1) // include events on the same UTC day as the snapshot
+
+		var latestUpdate *horizon.LastDivsUpdate
+		for j := range activity.LastDivsUpdates {
+			if activity.LastDivsUpdates[j].TS.Before(cutoff) {
+				latestUpdate = &activity.LastDivsUpdates[j]
+			}
+		}
+		var latestGroup *horizon.RecipientGroup
+		for j := range activity.RecipientGroups {
+			if activity.RecipientGroups[j].TS.Before(cutoff) {
+				latestGroup = &activity.RecipientGroups[j]
+			}
+		}
+
+		var inds []indicator.Indicator
+		if latestUpdate != nil {
+			inds = append(inds, indicator.NewIndicator(11, latestUpdate.Value, "", ""))
+		}
+		if latestGroup != nil {
+			inds = append(inds, indicator.NewIndicator(18, decimal.NewFromInt(int64(len(latestGroup.Recipients))), "", ""))
+		}
+		if len(inds) == 0 {
+			// No update or group ≤ this date: leave existing rows alone.
+			// Sticky-to-prior chains naturally because asc iteration means
+			// previous snapshots have already written the carried-forward
+			// values.
+			continue
+		}
+
+		if err := indicatorRepo.Save(ctx, entityID, date, inds); err != nil {
+			failed++
+			consecutive++
+			slog.Error("backfill-divs: persist", "date", date.Format("2006-01-02"), "error", err)
+			if consecutive >= maxConsecutiveErrors {
+				return fmt.Errorf("aborting after %d consecutive save errors, last: %w", consecutive, err)
+			}
+			continue
+		}
+
+		consecutive = 0
+		processed++
+		if (i+1)%50 == 0 {
+			slog.Info("backfill-divs progress", "processed", processed, "failed", failed, "total", len(metas))
+		}
+	}
+
+	slog.Info("backfill-divs complete", "processed", processed, "failed", failed, "total", len(metas))
 	return nil
 }
 
