@@ -328,56 +328,6 @@ func TestFetchAssetHolderCountByBalanceZeroBalanceExcluded(t *testing.T) {
 	}
 }
 
-// --- FetchAssetHolderIDsByBalance tests ---
-
-func TestFetchAssetHolderIDsByBalanceNativeRejected(t *testing.T) {
-	client := NewClient("http://unused", 1, 10*time.Millisecond)
-	_, err := client.FetchAssetHolderIDsByBalance(context.Background(), domain.XLMAsset(), decimal.NewFromInt(1))
-	if err == nil {
-		t.Fatal("expected error for native asset")
-	}
-}
-
-func TestFetchAssetHolderIDsByBalanceFilters(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
-			"_links": {"next": {"href": ""}},
-			"_embedded": {
-				"records": [
-					{
-						"account_id": "A",
-						"balances": [{"asset_code": "MTL", "asset_issuer": "GISSUER", "balance": "0.5000000"}]
-					},
-					{
-						"account_id": "B",
-						"balances": [{"asset_code": "MTL", "asset_issuer": "GISSUER", "balance": "2.0000000"}]
-					},
-					{
-						"account_id": "C",
-						"balances": [{"asset_code": "MTL", "asset_issuer": "GISSUER", "balance": "10.0000000"}]
-					}
-				]
-			}
-		}`))
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL, 1, 10*time.Millisecond)
-	asset := domain.AssetInfo{Code: "MTL", Issuer: "GISSUER"}
-
-	ids, err := client.FetchAssetHolderIDsByBalance(context.Background(), asset, decimal.NewFromInt(1))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(ids) != 2 {
-		t.Fatalf("got %d IDs, want 2", len(ids))
-	}
-	if ids[0] != "B" || ids[1] != "C" {
-		t.Errorf("ids = %v, want [B C]", ids)
-	}
-}
-
 // --- FetchAssetHolderBalancesByBalance tests ---
 
 func TestFetchAssetHolderBalancesByBalanceNativeRejected(t *testing.T) {

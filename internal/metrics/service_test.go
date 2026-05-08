@@ -17,17 +17,18 @@ import (
 // --- mocks ---
 
 type stubHorizon struct {
-	stats           map[string]horizon.AssetStats
-	statsErr        map[string]error
-	holderCounts    map[string]int
-	holderCountErr  map[string]error
-	holderBalances  map[string]map[string]decimal.Decimal
-	holderErr       map[string]error
-	holderIDs       map[string][]string
-	holderIDsErr    map[string]error
-	dividends       map[string]decimal.Decimal // by account address
-	dividendsErr    map[string]error
-	dividendsCalled int
+	stats              map[string]horizon.AssetStats
+	statsErr           map[string]error
+	holderCounts       map[string]int
+	holderCountErr     map[string]error
+	holderBalances     map[string]map[string]decimal.Decimal
+	holderErr          map[string]error
+	dividendActivity   horizon.DividendActivity
+	dividendsErr       error
+	dividendsCalled    int
+	accountDataValue   string
+	accountDataPresent bool
+	accountDataErr     error
 }
 
 type stubExpert struct {
@@ -65,22 +66,19 @@ func (s *stubHorizon) FetchAssetHolderBalancesByBalance(_ context.Context, asset
 	return s.holderBalances[asset.Code], nil
 }
 
-func (s *stubHorizon) FetchAssetHolderIDsByBalance(_ context.Context, asset domain.AssetInfo, _ decimal.Decimal) ([]string, error) {
-	if err, ok := s.holderIDsErr[asset.Code]; ok {
-		return nil, err
+func (s *stubHorizon) FetchDividendActivity(_ context.Context, _ string, _ []string, _ time.Time) (horizon.DividendActivity, error) {
+	s.dividendsCalled++
+	if s.dividendsErr != nil {
+		return horizon.DividendActivity{}, s.dividendsErr
 	}
-	return s.holderIDs[asset.Code], nil
+	return s.dividendActivity, nil
 }
 
-func (s *stubHorizon) FetchMonthlyEURMTLOutflow(_ context.Context, accountID string, _ []string) (decimal.Decimal, error) {
-	s.dividendsCalled++
-	if err, ok := s.dividendsErr[accountID]; ok {
-		return decimal.Zero, err
+func (s *stubHorizon) FetchAccountDataEntry(_ context.Context, _, _ string) (string, bool, error) {
+	if s.accountDataErr != nil {
+		return "", false, s.accountDataErr
 	}
-	if v, ok := s.dividends[accountID]; ok {
-		return v, nil
-	}
-	return decimal.Zero, nil
+	return s.accountDataValue, s.accountDataPresent, nil
 }
 
 type stubPrice struct {
@@ -159,14 +157,19 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 				"D": decimal.NewFromInt(150),
 			},
 		},
-		holderIDs: map[string][]string{
-			// EURMTL trustline holders. A and C are also shareholders → I18 = 2.
-			// X and Y are outsiders. B and D are shareholders without EURMTL.
-			"EURMTL": {"A", "C", "X", "Y"},
-		},
-		dividends: map[string]decimal.Decimal{
-			"GFUND1": decimal.RequireFromString("100"),
-			"GFUND2": decimal.RequireFromString("23.45"),
+		// I11 = LAST_DIVS at the latest manage_data update ≤ snapshot date.
+		// I18 = |Recipients| in the latest memo group ≤ snapshot date.
+		// 29 Apr snapshot: latest update is 7 Apr (123.45), latest group is
+		// the same date with two distinct recipients.
+		dividendActivity: horizon.DividendActivity{
+			LastDivsUpdates: []horizon.LastDivsUpdate{
+				{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Value: decimal.RequireFromString("80")},
+				{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Value: decimal.RequireFromString("123.45")},
+			},
+			RecipientGroups: []horizon.RecipientGroup{
+				{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/03/2026", Recipients: []string{"X", "Y", "Z"}},
+				{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/04/2026", Recipients: []string{"X", "Y"}},
+			},
 		},
 	}
 	p := &stubPrice{
@@ -206,7 +209,7 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		{"I62 shareholders any", m.MTLShareholdersAny, "5"}, // A,B,C,D,E all counted
 		{"I40 MTLAP holders", m.MTLAPHolders, "42"},
 		{"I23 median", m.MTLShareholdersMedian, "200"},         // sorted [100,150,250,300]
-		{"I18 EURMTL shareholders", m.EURMTLShareholders, "2"}, // {A,B,C,D} ∩ {A,C,X,Y} = {A,C}
+		{"I18 dividend recipients", m.EURMTLShareholders, "2"}, // distinct {X, Y}
 		{"I11 dividends", m.MonthlyDividends, "123.45"},
 		{"I25 daily volume", m.EURMTLDailyVolume, "500"},
 		{"I26 cumulative", m.EURMTLPaymentTotal, "12500"}, // 12000 + 500
@@ -239,8 +242,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		statsErr:       map[string]error{"MTL": flake, "MTLRECT": flake},
 		holderCountErr: map[string]error{"EURMTL": flake, "MTLAP": flake},
 		holderErr:      map[string]error{"MTL": flake, "MTLRECT": flake},
-		holderIDsErr:   map[string]error{"EURMTL": flake},
-		dividendsErr:   map[string]error{"GFUND1": flake, "GFUND2": flake},
+		dividendsErr:   flake,
 	}
 	p := &stubPrice{avgErr: map[string]error{"MTL": flake, "MTLRECT": flake}}
 	expert := &stubExpert{err: flake}
@@ -254,7 +256,7 @@ func TestEnrichMetricsStickyFallback(t *testing.T) {
 		},
 	}
 
-	svc := NewService(h, p, expert, repo, nil)
+	svc := NewService(h, p, expert, repo, []string{"GFUND1", "GFUND2"})
 	data := &domain.FundStructureData{}
 
 	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
@@ -419,118 +421,167 @@ func TestMedianEmpty(t *testing.T) {
 	}
 }
 
-// I11 sticky-on-zero: when every account legitimately returns zero (no recent
-// dividends) but yesterday had a non-zero figure, we keep yesterday's value.
-// Distinct from the Horizon-error case covered by TestEnrichMetricsStickyFallback.
-func TestComputeI11StickyWhenLiveSumIsZero(t *testing.T) {
-	h := &stubHorizon{
-		// All accounts return zero with no error.
-		dividends: map[string]decimal.Decimal{},
-	}
-	repo := &stubIndicatorRepo{
-		byTarget: map[string]map[int]indicator.Indicator{
-			"latest": indicatorMap(map[int]string{11: "2440.7"}),
+// Snap-on-event: with two updates and two memo groups present, the ones at-or-
+// before the snapshot date drive both I11 and I18 — newer ones are ignored.
+func TestComputeDividendActivityPicksLatestEventOnOrBeforeDate(t *testing.T) {
+	activity := horizon.DividendActivity{
+		LastDivsUpdates: []horizon.LastDivsUpdate{
+			{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Value: decimal.NewFromInt(80)},
+			{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Value: decimal.NewFromInt(123)},
+			{TS: time.Date(2026, 5, 7, 6, 0, 0, 0, time.UTC), Value: decimal.NewFromInt(200)},
+		},
+		RecipientGroups: []horizon.RecipientGroup{
+			{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/03/2026", Recipients: []string{"X", "Y", "Z"}},
+			{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/04/2026", Recipients: []string{"X", "Y"}},
+			{TS: time.Date(2026, 5, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/05/2026", Recipients: []string{"X", "Y", "Z", "W"}},
 		},
 	}
-	svc := NewService(h, &stubPrice{}, &stubExpert{}, repo, []string{"GFUND1", "GFUND2", "GFUND3"})
+	h := &stubHorizon{dividendActivity: activity}
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
-	got := svc.computeI11(context.Background(), repo.byTarget["latest"])
-	if got == nil || *got != "2440.7" {
-		t.Errorf("computeI11 = %v, want sticky to 2440.7 (live zero, prior non-zero)", got)
+	// Snapshot 2026-04-29: latest ≤ that date is the 2026-04-07 event/update.
+	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), nil)
+	if !ok {
+		t.Fatal("ok=false, want true")
 	}
-	if h.dividendsCalled != 3 {
-		t.Errorf("dividendsCalled = %d, want 3 (one walk per fund account)", h.dividendsCalled)
+	if i18 != 2 {
+		t.Errorf("i18 = %d, want 2 (recipients of 2026-04-07 event)", i18)
+	}
+	if i11 == nil || *i11 != "123" {
+		t.Errorf("i11 = %v, want 123 (LAST_DIVS at 2026-04-07)", i11)
 	}
 }
 
-// I11 should write a real zero — not nil — when both live and prior are zero
-// (or prior is missing entirely). The downstream calculator needs a definite
-// value, not a sticky from nothing.
-func TestComputeI11WritesZeroWhenPriorIsAlsoZero(t *testing.T) {
-	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubExpert{}, &stubIndicatorRepo{}, []string{"GFUND1"})
-	got := svc.computeI11(context.Background(), indicatorMap(map[int]string{11: "0"}))
-	if got == nil || *got != "0" {
-		t.Errorf("computeI11 = %v, want \"0\" (live zero, prior zero)", got)
+// A dividend lodged at 06:00 UTC on day T must count for the snapshot of day T
+// (which is dated at midnight UTC). This is the "instantly snap on dividend
+// day" requirement.
+func TestComputeDividendActivityIncludesEventOnSameUTCDay(t *testing.T) {
+	activity := horizon.DividendActivity{
+		LastDivsUpdates: []horizon.LastDivsUpdate{
+			{TS: time.Date(2026, 5, 7, 6, 56, 18, 0, time.UTC), Value: decimal.NewFromInt(2008)},
+		},
+		RecipientGroups: []horizon.RecipientGroup{
+			{TS: time.Date(2026, 5, 7, 6, 56, 34, 0, time.UTC), Memo: "mtl div 07/05/2026", Recipients: []string{"A", "B"}},
+		},
+	}
+	h := &stubHorizon{dividendActivity: activity}
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
+
+	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+		time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC), nil)
+	if !ok {
+		t.Fatalf("ok=false, want true")
+	}
+	if i18 != 2 {
+		t.Errorf("i18 = %d, want 2", i18)
+	}
+	if i11 == nil || *i11 != "2008" {
+		t.Errorf("i11 = %v, want 2008", i11)
 	}
 }
 
-// I18 must fall back to prior when the EURMTL holder-IDs walk fails, even if
-// the shareholder walk succeeded — otherwise a single Horizon hiccup on
-// /accounts?asset=EURMTL would silently zero out the column.
-func TestEnrichMetricsI18StickyOnEURMTLHoldersFailure(t *testing.T) {
-	date := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
-	flake := errors.New("503 service unavailable")
-	h := &stubHorizon{
-		holderBalances: map[string]map[string]decimal.Decimal{
-			"MTL":     {"A": decimal.NewFromInt(50)},
-			"MTLRECT": {"B": decimal.NewFromInt(60)},
+// Multiple txs sharing the same memo (Stellar 100-op cap forces big batches
+// into multiple txs) collapse into ONE recipient group at the walker level —
+// callers receive that group as one logical event. Test fixture exercises the
+// caller side: the stub already returns a single grouped value, so I18 reflects
+// the union of recipients from the batch (5 distinct in this fixture).
+func TestComputeDividendActivityMemoGroupedRecipients(t *testing.T) {
+	activity := horizon.DividendActivity{
+		LastDivsUpdates: []horizon.LastDivsUpdate{
+			{TS: time.Date(2026, 5, 7, 6, 56, 18, 0, time.UTC), Value: decimal.NewFromInt(2008)},
 		},
-		holderIDsErr: map[string]error{"EURMTL": flake},
-	}
-	repo := &stubIndicatorRepo{
-		byTarget: map[string]map[int]indicator.Indicator{
-			"latest": indicatorMap(map[int]string{18: "347"}),
+		RecipientGroups: []horizon.RecipientGroup{
+			// All the txs of memo "mtl div 07/05/2026" merged: 5 distinct recipients.
+			{TS: time.Date(2026, 5, 7, 6, 56, 34, 0, time.UTC), Memo: "mtl div 07/05/2026", Recipients: []string{"R1", "R2", "R3", "R4", "R5"}},
 		},
 	}
-	svc := NewService(h, &stubPrice{}, &stubExpert{}, repo, nil)
-	data := &domain.FundStructureData{}
+	h := &stubHorizon{dividendActivity: activity}
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
-	if err := svc.EnrichMetrics(context.Background(), date, data); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if data.LiveMetrics.EURMTLShareholders == nil || *data.LiveMetrics.EURMTLShareholders != "347" {
-		t.Errorf("EURMTLShareholders = %v, want 347 (sticky-fallback)", data.LiveMetrics.EURMTLShareholders)
-	}
-	// I27 must still reflect the live shareholder walk that succeeded.
-	if data.LiveMetrics.MTLShareholders == nil || *data.LiveMetrics.MTLShareholders != "2" {
-		t.Errorf("MTLShareholders = %v, want 2 (live, not sticky)", data.LiveMetrics.MTLShareholders)
+	_, i18, ok := svc.computeDividendActivity(context.Background(),
+		time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC), nil)
+	if !ok || i18 != 5 {
+		t.Errorf("memo-grouped recipients: i18=%d want 5 (ok=%v)", i18, ok)
 	}
 }
 
-// Empty merged map → I18 must be 0 with ok=true. The intersection of an
-// empty set with anything is empty; nil maps must not panic.
-func TestComputeI18EmptyMerged(t *testing.T) {
+// No update or group within the lookback window → fall back to live
+// account.data["LAST_DIVS"] for I11 (the bot keeps it current); I18 sticky.
+func TestComputeDividendActivityFallsBackToLiveLastDivsWhenWalkEmpty(t *testing.T) {
 	h := &stubHorizon{
-		holderIDs: map[string][]string{"EURMTL": {"A", "B", "C"}},
+		dividendActivity:   horizon.DividendActivity{},
+		accountDataValue:   "2008.6829228",
+		accountDataPresent: true,
 	}
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
-	got, ok := svc.computeI18(context.Background(), domain.EURMTLAsset(), nil)
+
+	prev := indicatorMap(map[int]string{11: "999", 18: "347"})
+	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), prev)
 	if !ok {
-		t.Fatal("computeI18(nil merged) ok=false, want true")
+		t.Fatal("ok=false, want true")
 	}
-	if got != 0 {
-		t.Errorf("computeI18(nil merged) = %d, want 0", got)
+	if i11 == nil || *i11 != "2008.6829228" {
+		t.Errorf("i11 = %v, want 2008.6829228 (live account.data)", i11)
+	}
+	if i18 != 347 {
+		t.Errorf("i18 = %d, want sticky 347", i18)
 	}
 }
 
-// computeI18 filters merged shareholders by sum>1 before intersecting with
-// EURMTL holders. An account with combined balance exactly 1 must NOT count.
-func TestComputeI18FiltersSumGreaterThanOne(t *testing.T) {
-	merged := map[string]decimal.Decimal{
-		"A": decimal.RequireFromString("1.0"),  // exactly 1 — excluded
-		"B": decimal.RequireFromString("1.01"), // > 1 — included
-		"C": decimal.NewFromInt(50),            // > 1 — included
-		"D": decimal.RequireFromString("0.5"),  // < 1 — excluded
-	}
-	h := &stubHorizon{
-		holderIDs: map[string][]string{
-			"EURMTL": {"A", "B", "C", "D", "Z"},
-		},
-	}
+// Walk empty AND account.data unavailable → sticky to prior. ok stays true.
+func TestComputeDividendActivityStickyWhenNoEvent(t *testing.T) {
+	h := &stubHorizon{dividendActivity: horizon.DividendActivity{}}
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
-	got, ok := svc.computeI18(context.Background(), domain.EURMTLAsset(), merged)
+
+	prev := indicatorMap(map[int]string{11: "2440.7", 18: "347"})
+	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), prev)
 	if !ok {
-		t.Fatal("computeI18 ok=false, want true")
+		t.Fatal("ok=false, want true (no event is not an error)")
 	}
-	if got != 2 {
-		t.Errorf("computeI18 = %d, want 2 (B and C only)", got)
+	if i11 == nil || *i11 != "2440.7" {
+		t.Errorf("i11 = %v, want sticky 2440.7", i11)
+	}
+	if i18 != 347 {
+		t.Errorf("i18 = %d, want sticky 347", i18)
 	}
 }
 
-func TestComputeI11WritesZeroWhenNoPrior(t *testing.T) {
-	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubExpert{}, nil, []string{"GFUND1"})
-	got := svc.computeI11(context.Background(), nil)
-	if got == nil || *got != "0" {
-		t.Errorf("computeI11 = %v, want \"0\" (no prior available)", got)
+// Horizon walk failed → ok=false; both indicators must sticky-fallback at the
+// caller. computeDividendActivity returns the prior I11 directly to keep the
+// payload populated; I18 is signalled via ok=false so the caller picks prior.
+func TestComputeDividendActivityErrorReturnsOKFalse(t *testing.T) {
+	flake := errors.New("503")
+	h := &stubHorizon{dividendsErr: flake}
+	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
+
+	_, _, ok := svc.computeDividendActivity(context.Background(),
+		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), nil)
+	if ok {
+		t.Error("ok=true, want false on Horizon error")
 	}
+}
+
+// auditI18VsI27 must NOT log when shareholder stats are unavailable (i27OK
+// false): comparing recipients against a fallback I27 from yesterday would
+// produce a misleading alarm during real cascades.
+func TestAuditI18VsI27SkipsWhenI27Unavailable(t *testing.T) {
+	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubExpert{}, nil, nil)
+	// Just exercise the path; we're checking it doesn't panic and the
+	// guard short-circuits. No assertion on log because slog is global.
+	svc.auditI18VsI27(347, 0, false)
+	svc.auditI18VsI27(0, 384, false)
+}
+
+// auditI18VsI27 boundary: ≤5% divergence stays silent, >5% logs. The audit is
+// a business signal of distribution gaps; tripping it on noise (e.g. 1 holder
+// out of 380) would train operators to ignore it.
+func TestAuditI18VsI27ThresholdBoundary(t *testing.T) {
+	svc := NewService(&stubHorizon{}, &stubPrice{}, &stubExpert{}, nil, nil)
+	// 19/380 = 5.0% exactly — at threshold, must NOT log.
+	svc.auditI18VsI27(361, 380, true)
+	// 20/380 = 5.26% — over threshold, logs.
+	svc.auditI18VsI27(360, 380, true)
 }
