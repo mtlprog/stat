@@ -23,6 +23,7 @@ func NewService(hist *HistoricalData) *Service {
 	registry.Register(&Layer2Calculator{})
 	registry.Register(&DividendCalculator{})
 	registry.Register(&TokenomicsCalculator{})
+	registry.Register(&BPPCalculator{})
 	return &Service{registry: registry, hist: hist}
 }
 

@@ -19,6 +19,7 @@ func TestBuildMonitoringRows(t *testing.T) {
 		{Indicator: indicator.Indicator{ID: 5, Value: decimal.NewFromFloat(639256.44)}},
 		{Indicator: indicator.Indicator{ID: 10, Value: decimal.NewFromFloat(6.29)}},
 		{Indicator: indicator.Indicator{ID: 11, Value: decimal.NewFromFloat(4434.70)}},
+		{Indicator: indicator.Indicator{ID: 39, Value: decimal.NewFromInt(24000)}},
 		{Indicator: indicator.Indicator{ID: 62, Value: decimal.NewFromFloat(310.0)}},
 	}
 
@@ -103,9 +104,14 @@ func TestBuildMonitoringRows(t *testing.T) {
 		t.Errorf("data row missing I4: expected nil, got %v (%T)", dataRow[4], dataRow[4])
 	}
 
-	// MTLAP slot (index 40) — deprecated, indicatorID=0, expect nil
+	// BPP slot (index 39) — mapped to I39, manually-managed constant
+	if v, ok := dataRow[39].(float64); !ok || v != 24000.0 {
+		t.Errorf("data row BPP/I39: expected 24000.0, got %v", dataRow[39])
+	}
+
+	// MTLAP slot (index 40) — mapped to I40 but no I40 row supplied in this fixture, expect nil
 	if dataRow[40] != nil {
-		t.Errorf("data row MTLAP (deprecated I40 slot): expected nil, got %v", dataRow[40])
+		t.Errorf("data row MTLAP (I40 missing from fixture): expected nil, got %v", dataRow[40])
 	}
 
 	// Shareholders / I62 (index 41) — last column

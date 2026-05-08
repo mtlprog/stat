@@ -240,6 +240,7 @@ func TestIsRegistered(t *testing.T) {
 		desc string
 	}{
 		{1, true, "I1 — Market Cap, currently registered"},
+		{39, true, "I39 — BPP (manually-managed constant)"},
 		{40, true, "I40 — Association Participants (MTLAP holders)"},
 		{62, true, "I62 — Shareholders"},
 		{16, false, "I16 — deprecated, removed from registry"},

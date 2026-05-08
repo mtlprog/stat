@@ -66,7 +66,7 @@ var monitoringColumns = []monitoringCol{
 	{header: "P/S (by cap)", indicatorID: 0, fixedValue: nil},
 	{header: "Margin", indicatorID: 0, fixedValue: nil},
 	{header: "Payout Ratio", indicatorID: 0, fixedValue: nil},
-	{header: "BPP", indicatorID: 0, fixedValue: nil},
+	{header: "BPP", indicatorID: 39},
 	{header: "MTLAP", indicatorID: 40},
 	{header: "Shareholders", indicatorID: 62},
 }
@@ -381,9 +381,9 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		0: 65, 1: 75, 2: 40, 3: 75, 4: 50, 5: 55, 6: 50, 7: 60, // Date..MTLRECT
 		9: 30, 11: 50, 12: 50, // RegPrice, Dividends
 		13: 22, 14: 22, 19: 22, 20: 22, // empty cols
-		21: 50, 22: 55, 23: 30, 24: 50, 27: 50, 40: 50, 41: 50, // large-number cols (I62 at 41, I40 at 40)
+		21: 50, 22: 55, 23: 30, 24: 50, 27: 50, 39: 50, 40: 50, 41: 50, // large-number cols (I39 BPP at 39, I40 at 40, I62 at 41)
 		28: 22, 29: 22, 31: 22, 32: 22, // empty cols
-		35: 22, 36: 22, 37: 22, 38: 22, 39: 22, // empty cols
+		35: 22, 36: 22, 37: 22, 38: 22, // empty cols
 	}
 	for col := range int64(totalCols) {
 		px := int64(35)

@@ -37,7 +37,7 @@ Legend:
 | I27 | More-one-share Shareholders   | accounts with ≥1 MTL or MTLRECT      | ✅     | `metrics/service.go::fetchShareholderStats` (≥1 cohort)   |
 | I30 | Price-to-book ratio           | I10 / I8                             | ✅     | `layer2.go`                                               |
 | I34 | P/E                           | I10 / I54                            | ✅     | `dividend.go`                                             |
-| I39 | Bitcoin purchase price        | EURMTL spent on BTC / BTCMTL held    | ❌     | TODO — see Q1                                             |
+| I39 | Bitcoin purchase price        | manually-managed constant (BPP)      | ✅     | `bpp.go` — static `bppValue` const, real formula deferred |
 | I40 | Association Participants      | MTLAP holders with balance ≥1        | ✅     | `metrics/service.go` (live, `MTLAPHolders`)               |
 | I43 | Total ROI                     | ((I10 − I55) + I54) / I55            | ✅     | `dividend.go` (folded in from the deleted analytics calc) |
 | I49 | MTLRECT Market Price          | VWAP last 100 trades MTLRECT/EURMTL  | ✅     | `layer1.go` (live, `MTLRECTMarketPrice`)                  |
@@ -59,12 +59,17 @@ Legend:
 
 ## Open TODOs (need more product input)
 
-### Q1. I39 — Bitcoin purchase price
+### Q1. I39 — Bitcoin purchase price (real formula)
 
-Formula: «Сумма EURMTL, потраченная на закуп BTC, делённая на количество BTCMTL на балансах
-Фонда».
+Currently shipped as a manually-managed constant in `internal/indicator/bpp.go`
+(`bppValue`). Edit the constant and redeploy when product wants the value bumped;
+existing `fund_indicators` rows are intentionally not rewritten on changes
+(history is frozen at whatever value was current on each snapshot date).
 
-Open questions before implementation:
+The eventual real formula is «Сумма EURMTL, потраченная на закуп BTC,
+делённая на количество BTCMTL на балансах Фонда» — still deferred per product
+owner («там сложно, нужно больше информации»). Open questions before that
+replaces the constant:
 
 - **Numerator (EURMTL spent):** all EURMTL outflows that net-resulted in BTCMTL inflow within
   the same Stellar transaction / path-payment, or all on-DEX EURMTL→BTCMTL trades by fund
@@ -77,8 +82,6 @@ Open questions before implementation:
 - **Sells:** when the fund sells BTCMTL, do we (a) leave the cumulative cost numerator alone
   (FIFO/LIFO), (b) reduce it pro-rata by the fraction of BTCMTL sold, or (c) reset to the
   last-purchase-only basis?
-
-Status: deferred per product owner — "там сложно, нужно больше информации".
 
 ### Q2. I50 — MTL/MTLRECT divergence
 
