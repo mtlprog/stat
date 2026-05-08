@@ -1246,9 +1246,12 @@ func runBackfillDivs(c *cli.Context) error {
 	sort.Slice(metas, func(i, j int) bool { return metas[i].SnapshotDate.Before(metas[j].SnapshotDate) })
 
 	oldestDate := time.Date(metas[0].SnapshotDate.Year(), metas[0].SnapshotDate.Month(), metas[0].SnapshotDate.Day(), 0, 0, 0, 0, time.UTC)
-	// Walk one cycle earlier than the oldest snapshot so the very first
-	// snapshot can already pick up a "previous" dividend if one exists.
-	walkSince := oldestDate.AddDate(0, -2, 0)
+	// Walk one full annual cycle earlier than the oldest snapshot. Anything
+	// shorter risks leaving the earliest snapshots stuck on whatever stale
+	// I11/I18 rows pre-existed (the old import-from-sheets path or pre-fix
+	// daily writes), because the asc-iterating loop only writes a row when
+	// it has an event ≤ the snapshot date.
+	walkSince := oldestDate.AddDate(-1, 0, 0)
 
 	horizonClient := horizon.NewClient(cfg.HorizonURL, cfg.HorizonRetryMax, cfg.HorizonRetryBaseDelay)
 

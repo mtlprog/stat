@@ -171,15 +171,20 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	// events both numbers stay sticky to prior — the indicator changes
 	// instantaneously the day a distribution lands, then holds. Per the spec,
 	// I18 (recipients) is expected to closely match I27 (≥1-share holders)
-	// because the oferta is one-recipient-per-shareholder.
+	// because the oferta is one-recipient-per-shareholder. The audit only fires
+	// when I18 is fresh (came from a real recipient group, not sticky-prior),
+	// otherwise yesterday's I18 vs today's I27 would always look mismatched.
 	done = stage("dividends_walk")
 	{
-		i11Str, i18Count, divOK := s.computeDividendActivity(ctx, date, prev)
-		m.MonthlyDividends = i11Str
+		i11Str, i18Count, i18Fresh, divOK := s.computeDividendActivity(ctx, date, prev)
 		if divOK {
+			m.MonthlyDividends = i11Str
 			m.EURMTLShareholders = ptr(decimal.NewFromInt(int64(i18Count)).String())
-			s.auditI18VsI27(i18Count, stats.countAtLeastOne, shareholdersOK)
+			if i18Fresh {
+				s.auditI18VsI27(i18Count, stats.countAtLeastOne, shareholdersOK)
+			}
 		} else {
+			m.MonthlyDividends = pickPrior(prev, 11)
 			m.EURMTLShareholders = pickPrior(prev, 18)
 		}
 	}
@@ -359,20 +364,26 @@ func (s *Service) fetchShareholderStats(ctx context.Context, mtlAsset, mtlrectAs
 //     100 ops/tx, big batches split into multiple txs) collapse into one
 //     logical event.
 //
-// Both indicators snap on event and stay sticky between events. ok=false ⇒
-// Horizon error; caller sticky-falls back. ok=true with no recent event in the
-// lookback window ⇒ Info-logged sticky to prior.
+// Both indicators snap on event and stay sticky between events.
+//
+// Returns (i11, i18, i18Fresh, ok):
+//   - ok=false ⇒ Horizon walk failed; caller sticky-falls back BOTH I11 and I18.
+//   - ok=true, i18Fresh=false ⇒ no event in the lookback window; both values
+//     reflect prior (sticky). Caller writes them but must NOT trip the audit
+//     comparison against today's live I27.
+//   - ok=true, i18Fresh=true ⇒ a recipient group was found ≤ date; I18 reflects
+//     today's reality and the audit may compare it against I27.
 //
 // `date` matches the snapshot policy (midnight UTC of the report day); events
 // dated up to and including that UTC day count for the snapshot.
-func (s *Service) computeDividendActivity(ctx context.Context, date time.Time, prev map[int]indicator.Indicator) (*string, int, bool) {
+func (s *Service) computeDividendActivity(ctx context.Context, date time.Time, prev map[int]indicator.Indicator) (*string, int, bool, bool) {
 	stepCtx, cancel := withStepTimeout(ctx)
 	defer cancel()
 	since := date.Add(-dividendLookbackWindow)
 	activity, err := s.horizon.FetchDividendActivity(stepCtx, domain.MTLDividendDistributor, s.fundAddrs, since)
 	if err != nil {
 		slog.Error("metrics: fetch dividend activity failed, I11 and I18 fall back to prior", "error", err)
-		return pickPrior(prev, 11), 0, false
+		return nil, 0, false, false
 	}
 
 	cutoff := date.AddDate(0, 0, 1) // include events on the same UTC day as the snapshot
@@ -390,15 +401,28 @@ func (s *Service) computeDividendActivity(ctx context.Context, date time.Time, p
 		}
 	}
 
-	// Live read of the current account.data["LAST_DIVS"] is always authoritative
-	// for "today" and saves the lookback walk from being deeper than necessary.
-	// Fall back to it only when the manage_data history walk didn't surface the
-	// most recent update (e.g. lookback window is shorter than time since last
-	// distribution and we missed the update entry).
+	// Live read of `account.data["LAST_DIVS"]` is a fallback for the case where
+	// the lookback window misses the most recent update (e.g. distribution
+	// older than dividendLookbackWindow). It does not replace the walk —
+	// the walk is still needed for the recipient-group history.
 	if latestUpdate == nil {
-		if raw, present, derr := s.horizon.FetchAccountDataEntry(ctx, domain.MTLDividendDistributor, "LAST_DIVS"); derr == nil && present && raw != "" {
-			if v, perr := decimal.NewFromString(strings.TrimSpace(raw)); perr == nil {
-				return ptr(v.String()), recipientCountOrPrior(latestGroup, prev), true
+		liveCtx, liveCancel := withStepTimeout(ctx)
+		raw, present, derr := s.horizon.FetchAccountDataEntry(liveCtx, domain.MTLDividendDistributor, "LAST_DIVS")
+		liveCancel()
+		switch {
+		case derr != nil:
+			slog.Error("metrics: live read of LAST_DIVS data entry failed, I11 falls back to prior",
+				"account", domain.MTLDividendDistributor, "error", derr)
+		case !present:
+			slog.Info("metrics: distributor account has no LAST_DIVS data entry, I11 falls back to prior",
+				"account", domain.MTLDividendDistributor)
+		default:
+			v, perr := decimal.NewFromString(strings.TrimSpace(raw))
+			if perr != nil {
+				slog.Error("metrics: live LAST_DIVS data entry not numeric, I11 falls back to prior",
+					"account", domain.MTLDividendDistributor, "raw", raw, "error", perr)
+			} else {
+				return ptr(v.String()), recipientCountOrPrior(latestGroup, prev), latestGroup != nil, true
 			}
 		}
 	}
@@ -411,7 +435,7 @@ func (s *Service) computeDividendActivity(ctx context.Context, date time.Time, p
 		slog.Info("metrics: no dividend activity within lookback window, I11/I18 sticky to prior",
 			"lookback_days", int(dividendLookbackWindow.Hours()/24))
 	}
-	return i11, recipientCountOrPrior(latestGroup, prev), true
+	return i11, recipientCountOrPrior(latestGroup, prev), latestGroup != nil, true
 }
 
 func recipientCountOrPrior(group *horizon.RecipientGroup, prev map[int]indicator.Indicator) int {
@@ -423,8 +447,7 @@ func recipientCountOrPrior(group *horizon.RecipientGroup, prev map[int]indicator
 
 // pickPriorInt is a small helper for callers that want the prior value of an
 // integer-valued indicator (counts) in int form, falling back to zero if the
-// prior set is missing or has no entry. Symmetric with pickPrior; lives here
-// to keep the dividend logic self-contained.
+// pickPriorInt is the int-typed analogue of pickPrior for count indicators.
 func pickPriorInt(prev map[int]indicator.Indicator, id int) int {
 	if prev == nil {
 		return 0
@@ -438,11 +461,13 @@ func pickPriorInt(prev map[int]indicator.Indicator, id int) int {
 
 // auditI18VsI27 emits an Info-level audit log when I18 (dividend recipients)
 // diverges from I27 (≥1-share holders) by more than 5% — per the spec, оферта
-// guarantees these two should match. Divergence is a business signal of
-// distribution gaps, not an infrastructure failure (so Info, not Error). Skips
-// when shareholder stats are unavailable (i27OK=false), since the comparison
-// would be meaningless.
+// guarantees these two should match. Divergence is a symmetric business signal
+// (recipients < shareholders → missed payouts; recipients > shareholders →
+// payouts to non-shareholders), so the log is also symmetric. Skips when
+// shareholder stats are unavailable (i27OK=false) or population is too small
+// to be meaningful.
 const i18AuditDivergenceThreshold = 0.05
+const i18AuditMinPopulation = 5
 
 func (s *Service) auditI18VsI27(i18, i27 int, i27OK bool) {
 	if !i27OK {
@@ -452,7 +477,7 @@ func (s *Service) auditI18VsI27(i18, i27 int, i27OK bool) {
 	if i27 > maxV {
 		maxV = i27
 	}
-	if maxV == 0 {
+	if maxV < i18AuditMinPopulation {
 		return
 	}
 	diff := i18 - i27
@@ -460,7 +485,7 @@ func (s *Service) auditI18VsI27(i18, i27 int, i27OK bool) {
 		diff = -diff
 	}
 	if float64(diff)/float64(maxV) > i18AuditDivergenceThreshold {
-		slog.Info("metrics: I18 diverges from I27 by >5% — possible dividend distribution gap",
+		slog.Info("metrics: I18 diverges from I27 by >5% — recipients vs shareholders mismatch",
 			"i18", i18, "i27", i27, "abs_diff", diff)
 	}
 }
