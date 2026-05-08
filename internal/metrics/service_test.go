@@ -167,8 +167,8 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 				{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Value: decimal.RequireFromString("123.45")},
 			},
 			RecipientGroups: []horizon.RecipientGroup{
-				{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/03/2026", Recipients: []string{"X", "Y", "Z"}},
-				{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/04/2026", Recipients: []string{"X", "Y"}},
+				{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Recipients: []string{"X", "Y", "Z"}},
+				{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Recipients: []string{"X", "Y"}},
 			},
 		},
 	}
@@ -431,19 +431,22 @@ func TestComputeDividendActivityPicksLatestEventOnOrBeforeDate(t *testing.T) {
 			{TS: time.Date(2026, 5, 7, 6, 0, 0, 0, time.UTC), Value: decimal.NewFromInt(200)},
 		},
 		RecipientGroups: []horizon.RecipientGroup{
-			{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/03/2026", Recipients: []string{"X", "Y", "Z"}},
-			{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/04/2026", Recipients: []string{"X", "Y"}},
-			{TS: time.Date(2026, 5, 7, 6, 0, 0, 0, time.UTC), Memo: "mtl div 07/05/2026", Recipients: []string{"X", "Y", "Z", "W"}},
+			{TS: time.Date(2026, 3, 7, 6, 0, 0, 0, time.UTC), Recipients: []string{"X", "Y", "Z"}},
+			{TS: time.Date(2026, 4, 7, 6, 0, 0, 0, time.UTC), Recipients: []string{"X", "Y"}},
+			{TS: time.Date(2026, 5, 7, 6, 0, 0, 0, time.UTC), Recipients: []string{"X", "Y", "Z", "W"}},
 		},
 	}
 	h := &stubHorizon{dividendActivity: activity}
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
 	// Snapshot 2026-04-29: latest ≤ that date is the 2026-04-07 event/update.
-	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+	i11, i18, fresh, ok := svc.computeDividendActivity(context.Background(),
 		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), nil)
 	if !ok {
 		t.Fatal("ok=false, want true")
+	}
+	if !fresh {
+		t.Error("fresh=false, want true (a recipient group was found)")
 	}
 	if i18 != 2 {
 		t.Errorf("i18 = %d, want 2 (recipients of 2026-04-07 event)", i18)
@@ -462,16 +465,19 @@ func TestComputeDividendActivityIncludesEventOnSameUTCDay(t *testing.T) {
 			{TS: time.Date(2026, 5, 7, 6, 56, 18, 0, time.UTC), Value: decimal.NewFromInt(2008)},
 		},
 		RecipientGroups: []horizon.RecipientGroup{
-			{TS: time.Date(2026, 5, 7, 6, 56, 34, 0, time.UTC), Memo: "mtl div 07/05/2026", Recipients: []string{"A", "B"}},
+			{TS: time.Date(2026, 5, 7, 6, 56, 34, 0, time.UTC), Recipients: []string{"A", "B"}},
 		},
 	}
 	h := &stubHorizon{dividendActivity: activity}
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
-	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+	i11, i18, fresh, ok := svc.computeDividendActivity(context.Background(),
 		time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC), nil)
 	if !ok {
 		t.Fatalf("ok=false, want true")
+	}
+	if !fresh {
+		t.Error("fresh=false, want true")
 	}
 	if i18 != 2 {
 		t.Errorf("i18 = %d, want 2", i18)
@@ -493,13 +499,13 @@ func TestComputeDividendActivityMemoGroupedRecipients(t *testing.T) {
 		},
 		RecipientGroups: []horizon.RecipientGroup{
 			// All the txs of memo "mtl div 07/05/2026" merged: 5 distinct recipients.
-			{TS: time.Date(2026, 5, 7, 6, 56, 34, 0, time.UTC), Memo: "mtl div 07/05/2026", Recipients: []string{"R1", "R2", "R3", "R4", "R5"}},
+			{TS: time.Date(2026, 5, 7, 6, 56, 34, 0, time.UTC), Recipients: []string{"R1", "R2", "R3", "R4", "R5"}},
 		},
 	}
 	h := &stubHorizon{dividendActivity: activity}
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
-	_, i18, ok := svc.computeDividendActivity(context.Background(),
+	_, i18, _, ok := svc.computeDividendActivity(context.Background(),
 		time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC), nil)
 	if !ok || i18 != 5 {
 		t.Errorf("memo-grouped recipients: i18=%d want 5 (ok=%v)", i18, ok)
@@ -517,10 +523,13 @@ func TestComputeDividendActivityFallsBackToLiveLastDivsWhenWalkEmpty(t *testing.
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
 	prev := indicatorMap(map[int]string{11: "999", 18: "347"})
-	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+	i11, i18, fresh, ok := svc.computeDividendActivity(context.Background(),
 		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), prev)
 	if !ok {
 		t.Fatal("ok=false, want true")
+	}
+	if fresh {
+		t.Error("fresh=true, want false (no recipient group, only live LAST_DIVS)")
 	}
 	if i11 == nil || *i11 != "2008.6829228" {
 		t.Errorf("i11 = %v, want 2008.6829228 (live account.data)", i11)
@@ -536,10 +545,13 @@ func TestComputeDividendActivityStickyWhenNoEvent(t *testing.T) {
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
 	prev := indicatorMap(map[int]string{11: "2440.7", 18: "347"})
-	i11, i18, ok := svc.computeDividendActivity(context.Background(),
+	i11, i18, fresh, ok := svc.computeDividendActivity(context.Background(),
 		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), prev)
 	if !ok {
 		t.Fatal("ok=false, want true (no event is not an error)")
+	}
+	if fresh {
+		t.Error("fresh=true, want false (no event in lookback)")
 	}
 	if i11 == nil || *i11 != "2440.7" {
 		t.Errorf("i11 = %v, want sticky 2440.7", i11)
@@ -549,15 +561,14 @@ func TestComputeDividendActivityStickyWhenNoEvent(t *testing.T) {
 	}
 }
 
-// Horizon walk failed → ok=false; both indicators must sticky-fallback at the
-// caller. computeDividendActivity returns the prior I11 directly to keep the
-// payload populated; I18 is signalled via ok=false so the caller picks prior.
+// Horizon walk failed → ok=false; the EnrichMetrics caller must sticky-fall
+// back BOTH I11 and I18 because compute returns nil for them on the error path.
 func TestComputeDividendActivityErrorReturnsOKFalse(t *testing.T) {
 	flake := errors.New("503")
 	h := &stubHorizon{dividendsErr: flake}
 	svc := NewService(h, &stubPrice{}, &stubExpert{}, nil, nil)
 
-	_, _, ok := svc.computeDividendActivity(context.Background(),
+	_, _, _, ok := svc.computeDividendActivity(context.Background(),
 		time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC), nil)
 	if ok {
 		t.Error("ok=true, want false on Horizon error")

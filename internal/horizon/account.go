@@ -40,9 +40,10 @@ func (c *Client) FetchAccountBalance(ctx context.Context, accountID string, asse
 }
 
 // FetchAccountDataEntry reads `account.data[key]` from /accounts/{id} and
-// returns the base64-decoded UTF-8 value. Returns ("", true) when the entry
-// is absent (caller decides whether that's an error). Returns ("", false)
-// only when the HTTP fetch or decode fails.
+// returns the base64-decoded UTF-8 value. The middle return is `present`:
+// false when the key is absent (HTTP succeeded, key missing) — caller decides
+// whether that's an error. The error return is non-nil only when the HTTP
+// fetch or base64 decode fails.
 func (c *Client) FetchAccountDataEntry(ctx context.Context, accountID, key string) (string, bool, error) {
 	account, err := c.FetchAccount(ctx, accountID)
 	if err != nil {
@@ -50,7 +51,7 @@ func (c *Client) FetchAccountDataEntry(ctx context.Context, accountID, key strin
 	}
 	encoded, ok := account.Data[key]
 	if !ok || encoded == "" {
-		return "", true, nil
+		return "", false, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {

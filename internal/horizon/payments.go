@@ -21,15 +21,14 @@ type horizonTransaction struct {
 }
 
 type horizonOperation struct {
-	Type            string              `json:"type"`
-	To              string              `json:"to"`
-	From            string              `json:"from"`
-	AssetCode       string              `json:"asset_code"`
-	AssetIssuer     string              `json:"asset_issuer"`
-	Amount          string              `json:"amount"`
-	CreatedAt       string              `json:"created_at"`
-	TransactionHash string              `json:"transaction_hash"`
-	Transaction     *horizonTransaction `json:"transaction"`
+	Type        string              `json:"type"`
+	To          string              `json:"to"`
+	From        string              `json:"from"`
+	AssetCode   string              `json:"asset_code"`
+	AssetIssuer string              `json:"asset_issuer"`
+	Amount      string              `json:"amount"`
+	CreatedAt   string              `json:"created_at"`
+	Transaction *horizonTransaction `json:"transaction"`
 	// manage_data fields (populated only when Type == "manage_data")
 	Name  string `json:"name"`
 	Value string `json:"value"` // base64-encoded for manage_data ops with non-nil value
@@ -62,7 +61,6 @@ type LastDivsUpdate struct {
 // snapshot date.
 type RecipientGroup struct {
 	TS         time.Time // earliest tx timestamp in the group
-	Memo       string    // raw (cased) memo, e.g. "mtl div 07/05/2026"
 	Recipients []string  // distinct, non-fund destinations
 }
 
@@ -105,7 +103,6 @@ func (c *Client) FetchDividendActivity(ctx context.Context, distributor string, 
 
 	type partial struct {
 		ts         time.Time
-		memo       string
 		recipients map[string]struct{}
 	}
 	byMemo := make(map[string]*partial)
@@ -123,6 +120,8 @@ func (c *Client) FetchDividendActivity(ctx context.Context, distributor string, 
 		for _, op := range resp.Embedded.Records {
 			t, err := time.Parse(time.RFC3339, op.CreatedAt)
 			if err != nil {
+				slog.Error("dividend walker: op timestamp not RFC3339, skipping",
+					"raw", op.CreatedAt, "error", err)
 				continue
 			}
 			if t.Before(since) {
@@ -165,11 +164,10 @@ func (c *Client) FetchDividendActivity(ctx context.Context, distributor string, 
 					continue
 				}
 
-				key := memoLower
-				ev, ok := byMemo[key]
+				ev, ok := byMemo[memoLower]
 				if !ok {
-					ev = &partial{ts: t, memo: op.Transaction.Memo, recipients: make(map[string]struct{})}
-					byMemo[key] = ev
+					ev = &partial{ts: t, recipients: make(map[string]struct{})}
+					byMemo[memoLower] = ev
 				}
 				if t.Before(ev.ts) {
 					ev.ts = t
@@ -184,9 +182,7 @@ func (c *Client) FetchDividendActivity(ctx context.Context, distributor string, 
 
 		u, err := url.Parse(resp.Links.Next.Href)
 		if err != nil {
-			slog.Error("failed to parse Horizon pagination link, results may be incomplete",
-				"href", resp.Links.Next.Href, "error", err)
-			break
+			return DividendActivity{}, fmt.Errorf("parsing Horizon pagination link %q: %w", resp.Links.Next.Href, err)
 		}
 		path = u.Path + "?" + u.RawQuery
 	}
@@ -199,7 +195,6 @@ func (c *Client) FetchDividendActivity(ctx context.Context, distributor string, 
 		}
 		groups = append(groups, RecipientGroup{
 			TS:         ev.ts,
-			Memo:       ev.memo,
 			Recipients: recipients,
 		})
 	}

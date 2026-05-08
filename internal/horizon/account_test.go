@@ -96,3 +96,60 @@ func TestFetchAccountError(t *testing.T) {
 		t.Fatal("expected error for missing account, got nil")
 	}
 }
+
+// FetchAccountDataEntry has three meaningful states the caller discriminates:
+// present-and-decoded, absent (HTTP 200, key missing), and bad base64.
+func TestFetchAccountDataEntryPresent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// "MjAwOC42ODI5MjI4" = base64("2008.6829228")
+		w.Write([]byte(`{"id":"GABC","balances":[],"data":{"LAST_DIVS":"MjAwOC42ODI5MjI4"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	val, present, err := client.FetchAccountDataEntry(context.Background(), "GABC", "LAST_DIVS")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !present {
+		t.Fatal("present=false, want true")
+	}
+	if val != "2008.6829228" {
+		t.Errorf("val = %q, want %q", val, "2008.6829228")
+	}
+}
+
+func TestFetchAccountDataEntryAbsent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"GABC","balances":[],"data":{"OtherKey":"YWJj"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	val, present, err := client.FetchAccountDataEntry(context.Background(), "GABC", "LAST_DIVS")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if present {
+		t.Errorf("present=true, want false (key missing)")
+	}
+	if val != "" {
+		t.Errorf("val = %q, want empty", val)
+	}
+}
+
+func TestFetchAccountDataEntryBadBase64(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"GABC","balances":[],"data":{"LAST_DIVS":"not_base64!!!"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 1, 10*time.Millisecond)
+	_, _, err := client.FetchAccountDataEntry(context.Background(), "GABC", "LAST_DIVS")
+	if err == nil {
+		t.Fatal("expected base64 decode error, got nil")
+	}
+}
