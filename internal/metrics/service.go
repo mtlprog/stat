@@ -193,21 +193,26 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	done()
 
 	// I25 (daily) and I26 (cumulative) come from a single call to
-	// stellar.expert's pre-aggregated /stats-history. Falls back to the prior
-	// day's persisted values on any failure — including ErrNoDailyEntry, which
-	// fires when stellar.expert hasn't ingested today yet.
+	// stellar.expert's pre-aggregated /stats-history. Spec for I25 is
+	// "оборот за прошлые сутки" — today's stats-history bucket is a partial
+	// running total (00:00 UTC → now), so we always query the previous full
+	// UTC day. I26 cumulative shifts in lockstep so the invariant
+	// I26[T] = I26[T-1] + I25[T] holds. Falls back to the prior day's
+	// persisted values on any failure — including ErrNoDailyEntry, which
+	// fires when stellar.expert hasn't ingested yesterday yet.
 	done = stage("eurmtl_payment_stats")
 	{
 		stepCtx, cancel := withStepTimeout(ctx)
-		stats, err := s.expert.FetchEURMTLPaymentStats(stepCtx, date)
+		priorDay := date.AddDate(0, 0, -1)
+		stats, err := s.expert.FetchEURMTLPaymentStats(stepCtx, priorDay)
 		cancel()
 		switch {
 		case err == nil:
 			m.EURMTLDailyVolume = ptr(stats.Daily.String())
 			m.EURMTLPaymentTotal = ptr(stats.Cumulative.String())
 		case errors.Is(err, stellarexpert.ErrNoDailyEntry):
-			slog.Info("metrics: stellar.expert has no entry for today yet, reusing prior I25/I26",
-				"date", date.Format("2006-01-02"))
+			slog.Info("metrics: stellar.expert has no entry for prior day yet, reusing persisted I25/I26",
+				"prior_day", priorDay.Format("2006-01-02"))
 			m.EURMTLDailyVolume = pickPrior(prev, 25)
 			m.EURMTLPaymentTotal = pickPrior(prev, 26)
 		default:

@@ -31,11 +31,13 @@ type stubHorizon struct {
 }
 
 type stubExpert struct {
-	stats stellarexpert.Stats
-	err   error
+	stats      stellarexpert.Stats
+	err        error
+	calledWith time.Time
 }
 
-func (s *stubExpert) FetchEURMTLPaymentStats(_ context.Context, _ time.Time) (stellarexpert.Stats, error) {
+func (s *stubExpert) FetchEURMTLPaymentStats(_ context.Context, date time.Time) (stellarexpert.Stats, error) {
+	s.calledWith = date
 	return s.stats, s.err
 }
 
@@ -219,6 +221,14 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		if !decimal.RequireFromString(*c.got).Equal(decimal.RequireFromString(c.want)) {
 			t.Errorf("%s = %s, want %s", c.field, *c.got, c.want)
 		}
+	}
+
+	// I25 spec is "за прошлые сутки" — the call must target date-1, not date,
+	// because today's stats-history bucket is a partial running total.
+	wantPrior := date.AddDate(0, 0, -1)
+	if !expert.calledWith.Equal(wantPrior) {
+		t.Errorf("FetchEURMTLPaymentStats called with %s, want %s (prior day)",
+			expert.calledWith.Format("2006-01-02"), wantPrior.Format("2006-01-02"))
 	}
 }
 
