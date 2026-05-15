@@ -20,13 +20,15 @@ type monitoringCol struct {
 	fixedValue  any
 }
 
-// monitoringColumns defines the 41 data columns (B through AP) in order.
+// monitoringColumns defines the 53 data columns (B through BB) in order.
 // Column A (Date) is prepended separately in buildMonitoringRows.
 //
 // Column order is load-bearing — row alignment in MONITORING (and in
 // import-excel / import-indicators-from-sheets) depends on positional
 // matching. Deprecated indicators have their indicatorID zeroed so the
 // column slot survives but emits nothing; do not delete the slot.
+// New indicators are appended at the end (positions 42+) so positions
+// 1..41 stay frozen for legacy imports.
 var monitoringColumns = []monitoringCol{
 	{header: "Market Cap EUR", indicatorID: 1},
 	{header: "Market Cap BTC", indicatorID: 2},
@@ -69,23 +71,62 @@ var monitoringColumns = []monitoringCol{
 	{header: "BPP", indicatorID: 39},
 	{header: "MTLAP", indicatorID: 40},
 	{header: "Shareholders", indicatorID: 62},
+	{header: "Total ROI", indicatorID: 43},
+	{header: "MTLRECT Market Price", indicatorID: 49},
+	{header: "DEFI Total Value", indicatorID: 51},
+	{header: "MCITY Total Value", indicatorID: 52},
+	{header: "MABIZ Total Value", indicatorID: 53},
+	{header: "Annual DPS", indicatorID: 54},
+	{header: "Price Year Ago", indicatorID: 55},
+	{header: "MFApart Total Value", indicatorID: 56},
+	{header: "Issuer Free Assets", indicatorID: 58},
+	{header: "BOSS Total Value", indicatorID: 59},
+	{header: "ADMIN Total Value", indicatorID: 60},
+	{header: "BTC Rate", indicatorID: 61},
 }
 
-// MonitoringColumnIndicatorIDs returns the indicator ID for each of the 41 MONITORING
-// data columns (B through AP). A value of 0 means no mapped indicator at that index.
+// MonitoringColumnIndicatorIDs returns the indicator ID for each of the 53 MONITORING
+// data columns (B through BB). A value of 0 means no mapped indicator at that index.
 func MonitoringColumnIndicatorIDs() []int {
 	return lo.Map(monitoringColumns, func(c monitoringCol, _ int) int { return c.indicatorID })
+}
+
+// MonitoringHeaderRows returns the canonical two-row header (indicator IDs in
+// row 1, header names in row 2) for the MONITORING sheet. Used by tooling
+// that refreshes stale headers in place when monitoringColumns changes.
+func MonitoringHeaderRows() [][]any {
+	idRow := make([]any, 1+len(monitoringColumns))
+	nameRow := make([]any, 1+len(monitoringColumns))
+	idRow[0] = ""
+	nameRow[0] = "Date"
+	for i, col := range monitoringColumns {
+		if col.indicatorID != 0 {
+			idRow[i+1] = float64(col.indicatorID)
+		} else {
+			idRow[i+1] = float64(i + 1)
+		}
+		nameRow[i+1] = col.header
+	}
+	return [][]any{idRow, nameRow}
 }
 
 // buildMonitoringRows builds header rows and a single data row for the MONITORING sheet.
 func buildMonitoringRows(rows []IndicatorRow, at time.Time) (headerRows [][]any, dataRow []any) {
 	byID := lo.KeyBy(rows, func(r IndicatorRow) int { return r.ID })
 
-	// Row 1: column numbers 1..41 (A is blank)
+	// Row 1: indicator ID per column (A is blank). For placeholder/fixed
+	// slots without a current indicator, fall back to the column position —
+	// historically those slots WERE the legacy indicator IDs at that position
+	// (e.g. col 9 was I9 "Regulatory Price" before deprecation), so the
+	// position number still reads as a stable reference.
 	colNums := make([]any, 1+len(monitoringColumns))
 	colNums[0] = ""
-	for i := range monitoringColumns {
-		colNums[i+1] = float64(i + 1)
+	for i, col := range monitoringColumns {
+		if col.indicatorID != 0 {
+			colNums[i+1] = float64(col.indicatorID)
+		} else {
+			colNums[i+1] = float64(i + 1)
+		}
 	}
 
 	// Row 2: header names
@@ -203,22 +244,17 @@ func (w *SheetsWriter) appendMonitoringRow(ctx context.Context, rows []Indicator
 
 	headerRows, dataRow := buildMonitoringRows(rows, date)
 
-	existing, err := w.svc.Spreadsheets.Values.Get(
-		w.spreadsheetID, "MONITORING!A1:A2",
-	).Context(ctx).Do()
+	// Always rewrite header rows 1-2 so the sheet stays in sync with
+	// monitoringColumns. The old "write only when empty" path left stale
+	// labels (e.g. "EURMTL overall payment per month" for what is now the
+	// cumulative slot) frozen forever after the slice changed.
+	_, err = w.svc.Spreadsheets.Values.Update(
+		w.spreadsheetID,
+		"MONITORING!A1",
+		&sheets.ValueRange{Values: headerRows},
+	).ValueInputOption("USER_ENTERED").Context(ctx).Do()
 	if err != nil {
-		return fmt.Errorf("reading MONITORING headers: %w", err)
-	}
-
-	if len(existing.Values) < 2 {
-		_, err = w.svc.Spreadsheets.Values.Update(
-			w.spreadsheetID,
-			"MONITORING!A1",
-			&sheets.ValueRange{Values: headerRows},
-		).ValueInputOption("USER_ENTERED").Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("writing MONITORING headers: %w", err)
-		}
+		return fmt.Errorf("writing MONITORING headers: %w", err)
 	}
 
 	// Check for duplicate date to prevent double-append on same-day reruns.
@@ -238,7 +274,7 @@ func (w *SheetsWriter) appendMonitoringRow(ctx context.Context, rows []Indicator
 
 	_, err = w.svc.Spreadsheets.Values.Append(
 		w.spreadsheetID,
-		"MONITORING!A:AP",
+		"MONITORING!A:BB",
 		&sheets.ValueRange{Values: [][]any{dataRow}},
 	).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Context(ctx).Do()
 	if err != nil {
@@ -273,7 +309,7 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 	// #D9EAD3 — light green from the original Excel
 	lightGreen := &sheets.Color{Red: 0.851, Green: 0.918, Blue: 0.827}
 
-	const totalCols = 42
+	totalCols := int64(1 + len(monitoringColumns))
 
 	var reqs []*sheets.Request
 
@@ -355,7 +391,7 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		"userEnteredFormat(numberFormat,backgroundColor)"))
 
 	// Per-column number formats, derived from indicator precision in
-	// IndicatorMeta. Each data column (1..41) gets its own format request so
+	// IndicatorMeta. Each data column gets its own format request so
 	// ratios/per-share amounts no longer leak shopspring's 16-digit division
 	// output into the rendered sheet.
 	for col := 1; col <= len(monitoringColumns); col++ {
@@ -375,17 +411,64 @@ func (w *SheetsWriter) applyMonitoringFormatting(ctx context.Context, mon sheetM
 		})
 	}
 
-	// Column widths sized to fit content: wide for large numbers,
-	// narrow for empty/nil columns, default 35px for small decimals.
+	// Column widths sized to fit content: wide for large monetary columns,
+	// narrow for empty placeholders. Key is the sheet column index (0 = Date,
+	// 1..53 = monitoringColumns positions). Unset indexes fall back to 35px.
 	monColWidths := map[int64]int64{
-		0: 65, 1: 75, 2: 40, 3: 75, 4: 50, 5: 55, 6: 50, 7: 60, // Date..MTLRECT
-		9: 30, 11: 50, 12: 50, // RegPrice, Dividends
-		13: 22, 14: 22, 19: 22, 20: 22, // empty cols
-		21: 50, 22: 55, 23: 30, 24: 50, 27: 50, 39: 50, 40: 50, 41: 50, // large-number cols (I39 BPP at 39, I40 at 40, I62 at 41)
-		28: 22, 29: 22, 31: 22, 32: 22, // empty cols
-		35: 22, 36: 22, 37: 22, 38: 22, // empty cols
+		0:  65,
+		1:  85,
+		2:  55,
+		3:  85,
+		4:  65,
+		5:  60,
+		6:  60,
+		7:  65,
+		8:  45,
+		9:  30,
+		10: 65,
+		11: 70,
+		12: 70,
+		13: 22,
+		14: 22,
+		15: 45,
+		17: 45,
+		18: 40,
+		19: 22,
+		20: 22,
+		21: 50,
+		22: 55,
+		23: 30,
+		24: 50,
+		25: 100, // I26 cumulative — sits at index 25 (swapped with I25 daily in the legacy header order)
+		26: 70,
+		27: 50,
+		28: 22,
+		29: 22,
+		30: 40,
+		31: 22,
+		32: 22,
+		34: 50,
+		35: 22,
+		36: 22,
+		37: 22,
+		38: 22,
+		39: 55,
+		40: 50,
+		41: 50, // I62 — appended at position 41 long before the rest of the I43+ batch
+		42: 45,
+		43: 65,
+		44: 90,
+		45: 95,
+		46: 85,
+		47: 45,
+		48: 65,
+		49: 85,
+		50: 85,
+		51: 75,
+		52: 75,
+		53: 70,
 	}
-	for col := range int64(totalCols) {
+	for col := range totalCols {
 		px := int64(35)
 		if p, ok := monColWidths[col]; ok {
 			px = p

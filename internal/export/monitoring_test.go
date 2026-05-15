@@ -20,6 +20,8 @@ func TestBuildMonitoringRows(t *testing.T) {
 		{Indicator: indicator.Indicator{ID: 10, Value: decimal.NewFromFloat(6.29)}},
 		{Indicator: indicator.Indicator{ID: 11, Value: decimal.NewFromFloat(4434.70)}},
 		{Indicator: indicator.Indicator{ID: 39, Value: decimal.NewFromInt(24000)}},
+		{Indicator: indicator.Indicator{ID: 43, Value: decimal.NewFromFloat(12.34)}},
+		{Indicator: indicator.Indicator{ID: 61, Value: decimal.NewFromInt(95000)}},
 		{Indicator: indicator.Indicator{ID: 62, Value: decimal.NewFromFloat(310.0)}},
 	}
 
@@ -33,26 +35,42 @@ func TestBuildMonitoringRows(t *testing.T) {
 	colNumRow := headerRows[0]
 	headerRow := headerRows[1]
 
-	// 42 columns: Date + 41 data columns
-	if len(colNumRow) != 42 {
-		t.Errorf("col num row: expected 42 columns, got %d", len(colNumRow))
+	// 54 columns: Date + 53 data columns
+	if len(colNumRow) != 54 {
+		t.Errorf("col num row: expected 54 columns, got %d", len(colNumRow))
 	}
-	if len(headerRow) != 42 {
-		t.Errorf("header row: expected 42 columns, got %d", len(headerRow))
+	if len(headerRow) != 54 {
+		t.Errorf("header row: expected 54 columns, got %d", len(headerRow))
 	}
-	if len(dataRow) != 42 {
-		t.Errorf("data row: expected 42 columns, got %d", len(dataRow))
+	if len(dataRow) != 54 {
+		t.Errorf("data row: expected 54 columns, got %d", len(dataRow))
 	}
 
-	// Row 1: column A is blank, then 1.0..41.0
+	// Row 1: column A is blank, mapped slots show indicator ID, placeholders
+	// fall back to position number.
 	if colNumRow[0] != "" {
 		t.Errorf("col num row[0]: expected empty, got %v", colNumRow[0])
 	}
 	if colNumRow[1] != 1.0 {
-		t.Errorf("col num row[1]: expected 1.0, got %v", colNumRow[1])
+		t.Errorf("col num row[1]: expected 1.0 (I1), got %v", colNumRow[1])
 	}
-	if colNumRow[41] != 41.0 {
-		t.Errorf("col num row[41]: expected 41.0, got %v", colNumRow[41])
+	if colNumRow[9] != 9.0 {
+		t.Errorf("col num row[9]: expected 9.0 (placeholder position fallback), got %v", colNumRow[9])
+	}
+	if colNumRow[25] != 26.0 {
+		t.Errorf("col num row[25]: expected 26.0 (I26 cumulative), got %v", colNumRow[25])
+	}
+	if colNumRow[26] != 25.0 {
+		t.Errorf("col num row[26]: expected 25.0 (I25 daily), got %v", colNumRow[26])
+	}
+	if colNumRow[41] != 62.0 {
+		t.Errorf("col num row[41]: expected 62.0 (I62 Shareholders), got %v", colNumRow[41])
+	}
+	if colNumRow[42] != 43.0 {
+		t.Errorf("col num row[42]: expected 43.0 (I43 Total ROI), got %v", colNumRow[42])
+	}
+	if colNumRow[53] != 61.0 {
+		t.Errorf("col num row[53]: expected 61.0 (I61 BTC Rate), got %v", colNumRow[53])
 	}
 
 	// Row 2: header names
@@ -114,14 +132,30 @@ func TestBuildMonitoringRows(t *testing.T) {
 		t.Errorf("data row MTLAP (I40 missing from fixture): expected nil, got %v", dataRow[40])
 	}
 
-	// Shareholders / I62 (index 41) — last column
+	// Shareholders / I62 (index 41) — legacy last column, stays frozen at 41
 	if v, ok := dataRow[41].(float64); !ok || v != 310.0 {
 		t.Errorf("data row Shareholders: expected 310.0, got %v", dataRow[41])
+	}
+
+	// I43 Total ROI (index 42) — first of the appended new columns
+	if headerRow[42] != "Total ROI" {
+		t.Errorf("header row[42]: expected 'Total ROI', got %v", headerRow[42])
+	}
+	if v, ok := dataRow[42].(float64); !ok || v != 12.34 {
+		t.Errorf("data row I43: expected 12.34, got %v", dataRow[42])
+	}
+
+	// I61 BTC Rate (index 53) — last column
+	if headerRow[53] != "BTC Rate" {
+		t.Errorf("header row[53]: expected 'BTC Rate', got %v", headerRow[53])
+	}
+	if v, ok := dataRow[53].(float64); !ok || v != 95000.0 {
+		t.Errorf("data row I61: expected 95000.0, got %v", dataRow[53])
 	}
 }
 
 func TestMonitoringColumnCount(t *testing.T) {
-	if len(monitoringColumns) != 41 {
-		t.Errorf("expected 41 monitoring columns, got %d", len(monitoringColumns))
+	if len(monitoringColumns) != 53 {
+		t.Errorf("expected 53 monitoring columns, got %d", len(monitoringColumns))
 	}
 }

@@ -45,12 +45,12 @@ type sheetMeta struct {
 	bandingIDs []int64
 }
 
-// ReadMonitoring fetches the full MONITORING sheet (`A1:AO`) as raw cell values.
+// ReadMonitoring fetches the full MONITORING sheet (`A1:BA`) as raw cell values.
 // Cells are returned as strings or numbers (per `valueRenderOption=UNFORMATTED_VALUE`).
 // Caller is responsible for skipping the two header rows.
 func (w *SheetsWriter) ReadMonitoring(ctx context.Context) ([][]any, error) {
 	resp, err := w.svc.Spreadsheets.Values.
-		Get(w.spreadsheetID, "MONITORING!A:AO").
+		Get(w.spreadsheetID, "MONITORING!A:BB").
 		ValueRenderOption("UNFORMATTED_VALUE").
 		DateTimeRenderOption("FORMATTED_STRING").
 		Context(ctx).
