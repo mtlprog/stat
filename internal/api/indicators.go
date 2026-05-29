@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 
 	"github.com/mtlprog/stat/internal/indicator"
@@ -95,11 +97,12 @@ func (h *IndicatorHandler) GetIndicators(w http.ResponseWriter, r *http.Request)
 // GetIndicatorsByDate handles GET /api/v1/indicators/{date}.
 //
 // @Summary      Indicators by date
-// @Description  Returns stored indicators for an exact snapshot date.
+// @Description  Returns the most recent value per indicator as of the given date (same semantics as GET /api/v1/indicators but bounded by date). Optional `compare` adds period-over-period changes anchored to that date.
 // @Tags         indicators
 // @Produce      json
-// @Param        date  path  string  true  "Snapshot date (YYYY-MM-DD)"
-// @Success      200  {array}   indicator.Indicator
+// @Param        date     path   string  true   "Snapshot date (YYYY-MM-DD)"
+// @Param        compare  query  string  false  "Comma-separated periods: any of 30d,90d,180d,365d, or 'all'"
+// @Success      200  {array}   IndicatorWithChanges
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
 // @Router       /api/v1/indicators/{date} [get]
@@ -111,17 +114,44 @@ func (h *IndicatorHandler) GetIndicatorsByDate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	indicators, err := h.repo.GetByDate(r.Context(), fundSlug, date)
+	asOf, err := h.repo.GetNearestBefore(r.Context(), fundSlug, date)
 	if err != nil {
-		if errors.Is(err, indicator.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "indicators not found for date")
-			return
-		}
 		slog.Error("failed to get indicators by date", "date", dateStr, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, indicators)
+	if len(asOf) == 0 {
+		writeError(w, http.StatusNotFound, "indicators not found for date")
+		return
+	}
+
+	indicators := sortedIndicators(asOf)
+
+	periods, err := parsePeriodList(r.URL.Query().Get("compare"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if len(periods) == 0 {
+		writeJSON(w, http.StatusOK, toWithChanges(indicators, nil))
+		return
+	}
+
+	historical := make(map[int]map[int]indicator.Indicator, len(periods))
+	for _, days := range periods {
+		before, err := h.repo.GetNearestBefore(r.Context(), fundSlug, date.AddDate(0, 0, -days))
+		if err != nil {
+			slog.Error("failed to fetch historical indicators", "date", dateStr, "days", days, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if before != nil {
+			historical[days] = before
+		}
+	}
+
+	writeJSON(w, http.StatusOK, toWithChanges(indicators, buildChanges(indicators, periods, historical)))
 }
 
 // toWithChanges wraps each Indicator with an optional Changes map (nil if no compare requested).
@@ -213,4 +243,11 @@ func parsePeriodDays(s string) (int, bool) {
 		return 365, true
 	}
 	return 0, false
+}
+
+// sortedIndicators converts a map of indicators to a slice ordered by indicator ID.
+func sortedIndicators(m map[int]indicator.Indicator) []indicator.Indicator {
+	ids := lo.Keys(m)
+	sort.Ints(ids)
+	return lo.Map(ids, func(id, _ int) indicator.Indicator { return m[id] })
 }

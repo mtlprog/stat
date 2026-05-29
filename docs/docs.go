@@ -156,7 +156,7 @@ const docTemplate = `{
         },
         "/api/v1/indicators/{date}": {
             "get": {
-                "description": "Returns stored indicators for an exact snapshot date.",
+                "description": "Returns the most recent value per indicator as of the given date (same semantics as GET /api/v1/indicators but bounded by date). Optional ` + "`" + `compare` + "`" + ` adds period-over-period changes anchored to that date.",
                 "produces": [
                     "application/json"
                 ],
@@ -171,6 +171,12 @@ const docTemplate = `{
                         "name": "date",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated periods: any of 30d,90d,180d,365d, or 'all'",
+                        "name": "compare",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -179,7 +185,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/github_com_mtlprog_stat_internal_indicator.Indicator"
+                                "$ref": "#/definitions/internal_api.IndicatorWithChanges"
                             }
                         }
                     },
@@ -313,26 +319,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "github_com_mtlprog_stat_internal_indicator.Indicator": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "unit": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "number"
-                }
-            }
-        },
         "github_com_mtlprog_stat_internal_snapshot.Snapshot": {
             "type": "object",
             "properties": {

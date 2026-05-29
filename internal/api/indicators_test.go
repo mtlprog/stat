@@ -18,20 +18,17 @@ type mockIndicatorRepo struct {
 	latest          []indicator.Indicator
 	latestDate      time.Time
 	latestErr       error
-	byDate          map[time.Time][]indicator.Indicator
 	historyPoints   []indicator.HistoryPoint
 	historyErr      error
 	nearestByCutoff map[time.Time]map[int]indicator.Indicator
+	nearestErr      error
 }
 
 func (m *mockIndicatorRepo) Save(_ context.Context, _ int, _ time.Time, _ []indicator.Indicator) error {
 	return nil
 }
 
-func (m *mockIndicatorRepo) GetByDate(_ context.Context, _ string, date time.Time) ([]indicator.Indicator, error) {
-	if inds, ok := m.byDate[date]; ok {
-		return inds, nil
-	}
+func (m *mockIndicatorRepo) GetByDate(_ context.Context, _ string, _ time.Time) ([]indicator.Indicator, error) {
 	return nil, indicator.ErrNotFound
 }
 
@@ -61,7 +58,11 @@ func (m *mockIndicatorRepo) GetNearestBefore(_ context.Context, _ string, date t
 			found = true
 		}
 	}
-	return best, nil
+	if found {
+		return best, nil
+	}
+	// No match — propagate nearestErr (nil means "no data", non-nil means DB error).
+	return nil, m.nearestErr
 }
 
 func sampleIndicator(id int, value string) indicator.Indicator {
@@ -124,8 +125,8 @@ func TestGetIndicatorsRepoError(t *testing.T) {
 func TestGetIndicatorsByDateSuccess(t *testing.T) {
 	date := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
 	repo := &mockIndicatorRepo{
-		byDate: map[time.Time][]indicator.Indicator{
-			date: {sampleIndicator(1, "100")},
+		nearestByCutoff: map[time.Time]map[int]indicator.Indicator{
+			date: {1: sampleIndicator(1, "100")},
 		},
 	}
 	handler := NewIndicatorHandler(repo)
@@ -136,7 +137,88 @@ func TestGetIndicatorsByDateSuccess(t *testing.T) {
 	handler.GetIndicatorsByDate(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", w.Code)
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var result []IndicatorWithChanges
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("got %d indicators, want 1", len(result))
+	}
+	if result[0].Changes != nil {
+		t.Errorf("expected nil Changes when no compare requested, got %v", result[0].Changes)
+	}
+}
+
+func TestGetIndicatorsByDateNotFound(t *testing.T) {
+	repo := &mockIndicatorRepo{}
+	handler := NewIndicatorHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/indicators/2024-01-15", nil)
+	req.SetPathValue("date", "2024-01-15")
+	w := httptest.NewRecorder()
+	handler.GetIndicatorsByDate(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestGetIndicatorsByDateWithCompare(t *testing.T) {
+	date := time.Date(2024, 4, 15, 0, 0, 0, 0, time.UTC)
+	historicalDate := date.AddDate(0, 0, -30)
+	repo := &mockIndicatorRepo{
+		nearestByCutoff: map[time.Time]map[int]indicator.Indicator{
+			date:           {1: sampleIndicator(1, "120")},
+			historicalDate: {1: sampleIndicator(1, "100")},
+		},
+	}
+	handler := NewIndicatorHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/indicators/2024-04-15?compare=30d", nil)
+	req.SetPathValue("date", "2024-04-15")
+	w := httptest.NewRecorder()
+	handler.GetIndicatorsByDate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var result []IndicatorWithChanges
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("got %d indicators, want 1", len(result))
+	}
+	change, ok := result[0].Changes["30d"]
+	if !ok {
+		t.Fatalf("expected Changes[\"30d\"] to exist, got %v", result[0].Changes)
+	}
+	if !change.Abs.Equal(decimal.NewFromInt(20)) {
+		t.Errorf("Abs = %s, want 20", change.Abs)
+	}
+}
+
+func TestGetIndicatorsByDateCompareRepoError(t *testing.T) {
+	date := time.Date(2024, 4, 15, 0, 0, 0, 0, time.UTC)
+	repo := &mockIndicatorRepo{
+		nearestByCutoff: map[time.Time]map[int]indicator.Indicator{
+			date: {1: sampleIndicator(1, "120")},
+		},
+		nearestErr: errors.New("db down"),
+	}
+	handler := NewIndicatorHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/indicators/2024-04-15?compare=30d", nil)
+	req.SetPathValue("date", "2024-04-15")
+	w := httptest.NewRecorder()
+	handler.GetIndicatorsByDate(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
 	}
 }
 

@@ -1,18 +1,5 @@
 basePath: /
 definitions:
-  github_com_mtlprog_stat_internal_indicator.Indicator:
-    properties:
-      description:
-        type: string
-      id:
-        type: integer
-      name:
-        type: string
-      unit:
-        type: string
-      value:
-        type: number
-    type: object
   github_com_mtlprog_stat_internal_snapshot.Snapshot:
     properties:
       createdAt:
@@ -205,12 +192,18 @@ paths:
       - indicators
   /api/v1/indicators/{date}:
     get:
-      description: Returns stored indicators for an exact snapshot date.
+      description: Returns the most recent value per indicator as of the given date
+        (same semantics as GET /api/v1/indicators but bounded by date). Optional `compare`
+        adds period-over-period changes anchored to that date.
       parameters:
       - description: Snapshot date (YYYY-MM-DD)
         in: path
         name: date
         required: true
+        type: string
+      - description: 'Comma-separated periods: any of 30d,90d,180d,365d, or ''all'''
+        in: query
+        name: compare
         type: string
       produces:
       - application/json
@@ -219,7 +212,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/github_com_mtlprog_stat_internal_indicator.Indicator'
+              $ref: '#/definitions/internal_api.IndicatorWithChanges'
             type: array
         "400":
           description: Bad Request
