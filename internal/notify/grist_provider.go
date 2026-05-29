@@ -45,10 +45,11 @@ func formatHTML(r Report) string {
 	mentions := strings.Join(r.Mentions, " ")
 
 	if r.ReportMissing {
-		return fmt.Sprintf(
-			"<b>🚨 Отчёт MTL Fund за %s не создан!</b>\n\nОжидаемый отчёт отсутствует в базе данных.\n\n<a href=\"%s\">Проверить вручную</a>\n\n%s",
-			date, r.ReportURL, mentions,
-		)
+		msg := fmt.Sprintf("<b>🚨 Отчёт MTL Fund за %s не создан!</b>\n\nОжидаемый отчёт отсутствует в базе данных.\n\n<a href=\"%s\">Проверить вручную</a>", date, r.ReportURL)
+		if mentions != "" {
+			msg += "\n\n" + mentions
+		}
+		return msg
 	}
 
 	var sb strings.Builder

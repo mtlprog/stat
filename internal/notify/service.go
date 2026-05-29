@@ -65,7 +65,7 @@ func (s *Service) Run(ctx context.Context) error {
 				ReportURL:     s.cfg.ReportURL,
 			}
 			if sendErr := s.sendAll(ctx, report); sendErr != nil {
-				return fmt.Errorf("sending missing-report alert: %w", sendErr)
+				return fmt.Errorf("report for %s not found; also failed to send alert: %w", today.Format("2006-01-02"), sendErr)
 			}
 			return fmt.Errorf("report for %s not found in database", today.Format("2006-01-02"))
 		}
@@ -75,6 +75,9 @@ func (s *Service) Run(ctx context.Context) error {
 	yesterdayMap, err := s.indicatorRepo.GetNearestBefore(ctx, "mtlf", yesterday)
 	if err != nil {
 		return fmt.Errorf("fetching yesterday's indicators: %w", err)
+	}
+	if len(yesterdayMap) == 0 {
+		slog.Info("no prior indicators found, percent-change alerts will be skipped", "date", yesterday.Format("2006-01-02"))
 	}
 
 	report := s.buildReport(today, todayIndicators, yesterdayMap)
@@ -89,21 +92,21 @@ func (s *Service) buildReport(date time.Time, today []indicator.Indicator, yeste
 		return ind, ok
 	})
 
-	var alerts []Alert
-	for _, ind := range today {
+	alerts := lo.FilterMap(today, func(ind indicator.Indicator, _ int) (Alert, bool) {
 		prev, ok := yesterday[ind.ID]
-		if !ok || prev.Value.IsZero() {
-			continue
+		if !ok {
+			return Alert{}, false
+		}
+		if prev.Value.IsZero() {
+			slog.Info("skipping percent-change for indicator with zero previous value", "indicator_id", ind.ID)
+			return Alert{}, false
 		}
 		changePct := ind.Value.Sub(prev.Value).Div(prev.Value).Mul(decimal.NewFromInt(100))
-		if changePct.Abs().GreaterThanOrEqual(alertThreshold) {
-			alerts = append(alerts, Alert{
-				Indicator:     ind,
-				Previous:      prev.Value,
-				ChangePercent: changePct.Round(2),
-			})
+		if changePct.Abs().LessThan(alertThreshold) {
+			return Alert{}, false
 		}
-	}
+		return Alert{Indicator: ind, Previous: prev.Value, ChangePercent: changePct.Round(2)}, true
+	})
 
 	return Report{
 		Date:          date,
@@ -119,7 +122,7 @@ func (s *Service) sendAll(ctx context.Context, report Report) error {
 	var errs []error
 	for _, p := range s.providers {
 		if err := p.Send(ctx, report); err != nil {
-			slog.Error("provider failed to send notification", "error", err)
+			slog.Error("provider failed to send notification", "provider", fmt.Sprintf("%T", p), "error", err)
 			errs = append(errs, err)
 		}
 	}

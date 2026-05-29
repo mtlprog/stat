@@ -66,18 +66,14 @@ func (c *Client) AddRecords(ctx context.Context, tableID string, records []map[s
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if resp.StatusCode == http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
+		return nil
+	}
+
+	preview, err := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if err != nil {
-		return fmt.Errorf("reading grist response: %w", err)
+		return fmt.Errorf("grist add-records returned %s (could not read body: %w)", resp.Status, err)
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		preview := respBody
-		if len(preview) > 512 {
-			preview = preview[:512]
-		}
-		return fmt.Errorf("grist add-records returned %s: %s", resp.Status, string(preview))
-	}
-
-	return nil
+	return fmt.Errorf("grist add-records returned %s: %s", resp.Status, string(preview))
 }
