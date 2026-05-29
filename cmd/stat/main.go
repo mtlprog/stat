@@ -36,9 +36,11 @@ import (
 	"github.com/mtlprog/stat/internal/export"
 	"github.com/mtlprog/stat/internal/external"
 	"github.com/mtlprog/stat/internal/fund"
+	"github.com/mtlprog/stat/internal/grist"
 	"github.com/mtlprog/stat/internal/horizon"
 	"github.com/mtlprog/stat/internal/indicator"
 	"github.com/mtlprog/stat/internal/metrics"
+	"github.com/mtlprog/stat/internal/notify"
 	"github.com/mtlprog/stat/internal/portfolio"
 	"github.com/mtlprog/stat/internal/price"
 	"github.com/mtlprog/stat/internal/snapshot"
@@ -111,6 +113,11 @@ func main() {
 				Usage:  "Import historical indicator values from the MONITORING Google Sheets tab into fund_indicators",
 				Action: runImportIndicatorsFromSheets,
 			},
+			{
+				Name:   "notify",
+				Usage:  "Check today's report and send a notification with key indicators and alerts",
+				Action: runNotify,
+			},
 		},
 	}
 
@@ -147,6 +154,40 @@ func runQuote(c *cli.Context) error {
 
 	slog.Info("quotes fetched successfully")
 	return nil
+}
+
+func runNotify(c *cli.Context) error {
+	ctx := c.Context
+	cfg := config.Load()
+
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.GristAPIKey == "" {
+		return fmt.Errorf("GRIST_KEY is required")
+	}
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, pool, migrations.FS); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	indicatorRepo := indicator.NewPgRepository(pool)
+	gristClient := grist.NewClient(cfg.GristAPIURL, cfg.GristDocID, cfg.GristAPIKey)
+	gristProvider := notify.NewGristProvider(gristClient, cfg.GristTableID, cfg.GristChatID, cfg.GristTopicID)
+
+	notifyCfg := notify.Config{
+		Mentions:  notify.ParseMentions(cfg.NotifyMentions),
+		ReportURL: "https://stat.mtlf.me",
+	}
+	svc := notify.NewService(indicatorRepo, []notify.Provider{gristProvider}, notifyCfg)
+
+	return svc.Run(ctx)
 }
 
 // configureLogger installs a slog handler whose level honours LOG_LEVEL

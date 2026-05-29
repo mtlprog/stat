@@ -20,6 +20,13 @@ type Config struct {
 	HTTPPort                  string
 	GoogleSheetsSpreadsheetID string
 	GoogleCredentialsJSON     string
+	GristAPIURL               string
+	GristAPIKey               string
+	GristDocID                string
+	GristTableID              string
+	GristChatID               int64
+	GristTopicID              int64
+	NotifyMentions            string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -36,6 +43,13 @@ func Load() Config {
 		HTTPPort:                  envOrDefault("HTTP_PORT", "8080"),
 		GoogleSheetsSpreadsheetID: os.Getenv("GOOGLE_SHEETS_SPREADSHEET_ID"),
 		GoogleCredentialsJSON:     os.Getenv("GOOGLE_CREDENTIALS_JSON"),
+		GristAPIURL:               envOrDefault("GRIST_API_URL", "https://montelibero.getgrist.com"),
+		GristAPIKey:               os.Getenv("GRIST_KEY"),
+		GristDocID:                envOrDefault("GRIST_DOC_ID", "oNYTdHkEstf9X7dkh7yH11"),
+		GristTableID:              envOrDefault("GRIST_TABLE_ID", "Messages"),
+		GristChatID:               envOrDefaultInt64("GRIST_CHAT_ID", -1002871416798),
+		GristTopicID:              envOrDefaultInt64("GRIST_TOPIC_ID", 0),
+		NotifyMentions:            envOrDefault("NOTIFY_MENTIONS", "@xdefrag"),
 	}
 }
 
@@ -52,6 +66,18 @@ func envOrDefaultWarn(key, defaultVal string) string {
 		slog.Warn("required env var not set", "key", key)
 	}
 	return v
+}
+
+func envOrDefaultInt64(key string, defaultVal int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			slog.Info("invalid int64 env var, using default", "key", key, "value", v, "default", defaultVal)
+			return defaultVal
+		}
+		return n
+	}
+	return defaultVal
 }
 
 func envOrDefaultInt(key string, defaultVal int) int {
