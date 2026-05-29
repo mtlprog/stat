@@ -62,7 +62,7 @@ func (s *Service) Run(ctx context.Context) error {
 				Date:          today,
 				ReportMissing: true,
 				Mentions:      s.cfg.Mentions,
-				ReportURL:     s.cfg.ReportURL,
+				ReportURL:     fmt.Sprintf("%s/?date=%s", s.cfg.ReportURL, today.Format("2006-01-02")),
 			}
 			if sendErr := s.sendAll(ctx, report); sendErr != nil {
 				return fmt.Errorf("report for %s not found; also failed to send alert: %w", today.Format("2006-01-02"), sendErr)
@@ -114,7 +114,7 @@ func (s *Service) buildReport(date time.Time, today []indicator.Indicator, yeste
 		KeyIndicators: keyIndicators,
 		Alerts:        alerts,
 		Mentions:      s.cfg.Mentions,
-		ReportURL:     s.cfg.ReportURL,
+		ReportURL:     fmt.Sprintf("%s/?date=%s", s.cfg.ReportURL, date.Format("2006-01-02")),
 	}
 }
 
