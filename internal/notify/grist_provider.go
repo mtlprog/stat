@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/mtlprog/stat/internal/grist"
 )
 
@@ -58,7 +60,7 @@ func formatHTML(r Report) string {
 	if len(r.KeyIndicators) > 0 {
 		sb.WriteString("\n<b>Ключевые индикаторы:</b>\n")
 		for _, ind := range r.KeyIndicators {
-			fmt.Fprintf(&sb, "I%d %s: %s %s\n", ind.ID, ind.Name, ind.Value.String(), ind.Unit)
+			fmt.Fprintf(&sb, "I%d %s: %s %s\n", ind.ID, ind.Name, formatDecimal(ind.Value), ind.Unit)
 		}
 	}
 
@@ -72,8 +74,8 @@ func formatHTML(r Report) string {
 			fmt.Fprintf(&sb, "I%d %s: %s → %s %s (%s%s%%)\n",
 				a.Indicator.ID,
 				a.Indicator.Name,
-				a.Previous.String(),
-				a.Indicator.Value.String(),
+				formatDecimal(a.Previous),
+				formatDecimal(a.Indicator.Value),
 				a.Indicator.Unit,
 				sign,
 				a.ChangePercent.StringFixed(2),
@@ -84,4 +86,35 @@ func formatHTML(r Report) string {
 	fmt.Fprintf(&sb, "\n<a href=\"%s\">Полный отчёт</a>", r.ReportURL)
 
 	return sb.String()
+}
+
+// formatDecimal formats a decimal number with space as the thousands separator.
+// Example: 1827956.42 → "1 827 956.42"
+func formatDecimal(d decimal.Decimal) string {
+	s := d.String()
+
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+
+	intPart, fracPart, hasFrac := strings.Cut(s, ".")
+
+	var buf strings.Builder
+	n := len(intPart)
+	for i, c := range intPart {
+		if i > 0 && (n-i)%3 == 0 {
+			buf.WriteByte(' ')
+		}
+		buf.WriteRune(c)
+	}
+
+	result := buf.String()
+	if hasFrac {
+		result += "." + fracPart
+	}
+	if neg {
+		result = "-" + result
+	}
+	return result
 }
