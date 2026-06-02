@@ -6,6 +6,8 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/samber/lo v1.52.0
 	github.com/shopspring/decimal v1.4.0
+	github.com/swaggo/http-swagger v1.3.4
+	github.com/swaggo/swag v1.16.6
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/oauth2 v0.35.0
@@ -39,8 +41,6 @@ require (
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/swaggo/files v0.0.0-20220610200504-28940afbdbfe // indirect
-	github.com/swaggo/http-swagger v1.3.4 // indirect
-	github.com/swaggo/swag v1.16.6 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	github.com/xuri/efp v0.0.1 // indirect

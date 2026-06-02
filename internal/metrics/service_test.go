@@ -207,7 +207,7 @@ func TestEnrichMetricsHappyPath(t *testing.T) {
 		{"I24 EURMTL participants", m.EURMTLParticipants, "200"},
 		{"I27 shareholders ≥1", m.MTLShareholders, "4"},     // A,B,C,D — E (0.5) excluded
 		{"I62 shareholders any", m.MTLShareholdersAny, "5"}, // A,B,C,D,E all counted
-		{"I40 MTLAP holders", m.MTLAPHolders, "42"},
+		{"I40 MTLAP holders", m.MTLAPHolders, "41"}, // 42 raw - 1 (Secretariat distribution account)
 		{"I23 median", m.MTLShareholdersMedian, "200"},         // sorted [100,150,250,300]
 		{"I18 dividend recipients", m.EURMTLShareholders, "2"}, // distinct {X, Y}
 		{"I11 dividends", m.MonthlyDividends, "123.45"},
