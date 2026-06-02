@@ -139,6 +139,8 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 	// I40: count of MTLAP holders with balance ≥1. /assets `accounts.authorized`
 	// for MTLAP returns ~1 because most holders are AUTHORIZED_TO_MAINTAIN_LIABILITIES,
 	// not authorized — so we have to walk and apply the balance filter.
+	// Subtract 1 to exclude the Secretariat's distribution account (holds MTLAP
+	// stock but is not a participant).
 	done = stage("MTLAP_holders")
 	{
 		stepCtx, cancel := withStepTimeout(ctx)
@@ -147,7 +149,7 @@ func (s *Service) EnrichMetrics(ctx context.Context, date time.Time, data *domai
 			slog.Error("metrics: fetch MTLAP holders failed, reusing prior I40", "error", err)
 			m.MTLAPHolders = pickPrior(prev, 40)
 		} else {
-			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(count)).String())
+			m.MTLAPHolders = ptr(decimal.NewFromInt(int64(count - 1)).String())
 		}
 		cancel()
 	}
